@@ -1,0 +1,24 @@
+# ── Core (required) ──
+numpy>=1.24
+sentence-transformers>=2.2
+datasets>=2.14
+tqdm>=4.65
+
+# ── Week 5: Cython ──
+cython>=3.0
+
+# ── Week 6: Numba ──
+numba>=0.58
+
+# ── Week 8: Optimization ──
+scipy>=1.11
+
+# ── Week 12: GPU (install the version matching your CUDA) ──
+# cupy-cuda12x>=12.0    # Uncomment if you have CUDA 12.x
+# cupy-cuda11x>=12.0    # Uncomment if you have CUDA 11.x
+
+# ── Week 13: PySpark ──
+# pyspark>=3.5          # Uncomment when needed
+
+# ── Visualization ──
+matplotlib>=3.7
