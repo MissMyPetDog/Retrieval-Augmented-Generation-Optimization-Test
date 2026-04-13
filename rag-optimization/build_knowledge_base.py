@@ -223,7 +223,7 @@ def step_verify(data_dir: str):
         v = np.load(vector_path)
         chunk_path = os.path.join(data_dir, "chunks.jsonl")
         if os.path.exists(chunk_path):
-            with open(chunk_path,encoding="utf-8") as f:
+            with open(chunk_path, encoding="utf-8") as f:
                 n_chunks = sum(1 for _ in f)
             if v.shape[0] == n_chunks:
                 print(f"\n  ✓ Vector count ({v.shape[0]:,}) matches chunk count")
