@@ -279,10 +279,22 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
     ivf.build(vectors, doc_ids)
     retriever = Retriever(index=ivf, embedder=embedder, sim_fn=cosine_sim_numpy)
 
+    ivf.use_precomputed_norms = False
+    ivf.use_numpy_candidate_gather = False
+    result_ivf_baseline = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
+    results[f"IVF({n_clusters},8) + NumPy (baseline)"] = {
+        "recall@10": result_ivf_baseline["mean_recall@k"],
+        "mrr": result_ivf_baseline["mean_mrr"],
+        "mean_latency_ms": result_ivf_baseline["mean_latency_ms"],
+        "p95_latency_ms": result_ivf_baseline["p95_latency_ms"],
+        "search_device": "cpu",
+        "embed_device": device,
+    }
+
     ivf.use_precomputed_norms = True
     ivf.use_numpy_candidate_gather = False
     result_ivf_cached_py = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
-    results[f"IVF({n_clusters},8) + NumPy (norm cache, py gather)"] = {
+    results[f"IVF({n_clusters},8) + NumPy (norm cache)"] = {
         "recall@10": result_ivf_cached_py["mean_recall@k"],
         "mrr": result_ivf_cached_py["mean_mrr"],
         "mean_latency_ms": result_ivf_cached_py["mean_latency_ms"],
@@ -309,6 +321,22 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
     )
 
     # ── IVF + NumPy + batch query embedding (throughput optimization) ──
+    ivf.use_numpy_candidate_gather = False
+    result_ivf_batch_no_np_gather = evaluate_retriever(
+        retriever,
+        queries,
+        chunk_lookup=chunk_lookup,
+        use_batch_embedding=True,
+    )
+    results[f"IVF({n_clusters},8) + NumPy (norm cache, batch embed)"] = {
+        "recall@10": result_ivf_batch_no_np_gather["mean_recall@k"],
+        "mrr": result_ivf_batch_no_np_gather["mean_mrr"],
+        "mean_latency_ms": result_ivf_batch_no_np_gather["mean_latency_ms"],
+        "p95_latency_ms": result_ivf_batch_no_np_gather["p95_latency_ms"],
+        "search_device": "cpu",
+        "embed_device": device,
+    }
+
     ivf.use_numpy_candidate_gather = True
     result_ivf_batch = evaluate_retriever(
         retriever,
