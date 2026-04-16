@@ -192,18 +192,35 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
     bf = BruteForceIndex()
     bf.build(vectors, doc_ids)
     retriever = Retriever(index=bf, embedder=embedder, sim_fn=cosine_sim_numpy)
-    result = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
-    results["BruteForce + NumPy"] = {
-        "recall@10": result["mean_recall@k"],
-        "mrr": result["mean_mrr"],
-        "mean_latency_ms": result["mean_latency_ms"],
-        "p95_latency_ms": result["p95_latency_ms"],
+
+    bf.use_precomputed_norms = False
+    result_bf_legacy = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
+    results["BruteForce + NumPy (no norm cache)"] = {
+        "recall@10": result_bf_legacy["mean_recall@k"],
+        "mrr": result_bf_legacy["mean_mrr"],
+        "mean_latency_ms": result_bf_legacy["mean_latency_ms"],
+        "p95_latency_ms": result_bf_legacy["p95_latency_ms"],
         "search_device": "cpu",
         "embed_device": device,
     }
-    print(f"    Recall@10: {result['mean_recall@k']:.4f}")
-    print(f"    MRR:       {result['mean_mrr']:.4f}")
-    print(f"    Latency:   {result['mean_latency_ms']:.1f}ms mean")
+
+    bf.use_precomputed_norms = True
+    result_bf_cached = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
+    results["BruteForce + NumPy (norm cache)"] = {
+        "recall@10": result_bf_cached["mean_recall@k"],
+        "mrr": result_bf_cached["mean_mrr"],
+        "mean_latency_ms": result_bf_cached["mean_latency_ms"],
+        "p95_latency_ms": result_bf_cached["p95_latency_ms"],
+        "search_device": "cpu",
+        "embed_device": device,
+    }
+    print(f"    Recall@10: {result_bf_cached['mean_recall@k']:.4f}")
+    print(f"    MRR:       {result_bf_cached['mean_mrr']:.4f}")
+    print(
+        f"    Latency:   {result_bf_legacy['mean_latency_ms']:.1f}ms -> "
+        f"{result_bf_cached['mean_latency_ms']:.1f}ms "
+        f"({result_bf_legacy['mean_latency_ms']/result_bf_cached['mean_latency_ms']:.2f}x)"
+    )
 
     # ── BruteForce + Numba parallel [CPU search] ──
     try:
@@ -257,17 +274,34 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
     ivf = IVFIndex(n_clusters=n_clusters, n_probes=8)
     ivf.build(vectors, doc_ids)
     retriever = Retriever(index=ivf, embedder=embedder, sim_fn=cosine_sim_numpy)
-    result = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
-    results[f"IVF({n_clusters},8) + NumPy"] = {
-        "recall@10": result["mean_recall@k"],
-        "mrr": result["mean_mrr"],
-        "mean_latency_ms": result["mean_latency_ms"],
-        "p95_latency_ms": result["p95_latency_ms"],
+
+    ivf.use_precomputed_norms = False
+    result_ivf_legacy = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
+    results[f"IVF({n_clusters},8) + NumPy (no norm cache)"] = {
+        "recall@10": result_ivf_legacy["mean_recall@k"],
+        "mrr": result_ivf_legacy["mean_mrr"],
+        "mean_latency_ms": result_ivf_legacy["mean_latency_ms"],
+        "p95_latency_ms": result_ivf_legacy["p95_latency_ms"],
         "search_device": "cpu",
         "embed_device": device,
     }
-    print(f"    Recall@10: {result['mean_recall@k']:.4f}")
-    print(f"    Latency:   {result['mean_latency_ms']:.1f}ms mean")
+
+    ivf.use_precomputed_norms = True
+    result_ivf_cached = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
+    results[f"IVF({n_clusters},8) + NumPy (norm cache)"] = {
+        "recall@10": result_ivf_cached["mean_recall@k"],
+        "mrr": result_ivf_cached["mean_mrr"],
+        "mean_latency_ms": result_ivf_cached["mean_latency_ms"],
+        "p95_latency_ms": result_ivf_cached["p95_latency_ms"],
+        "search_device": "cpu",
+        "embed_device": device,
+    }
+    print(f"    Recall@10: {result_ivf_cached['mean_recall@k']:.4f}")
+    print(
+        f"    Latency:   {result_ivf_legacy['mean_latency_ms']:.1f}ms -> "
+        f"{result_ivf_cached['mean_latency_ms']:.1f}ms "
+        f"({result_ivf_legacy['mean_latency_ms']/result_ivf_cached['mean_latency_ms']:.2f}x)"
+    )
 
     # ── Summary ──
     print(f"\n  {'Config':<35s} {'Recall':>8s} {'MRR':>8s} {'Latency':>10s} {'Search':>8s}")
