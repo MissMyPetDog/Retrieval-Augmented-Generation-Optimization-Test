@@ -406,11 +406,18 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
         pass
 
     # ── Summary ──
-    print(f"\n  {'Config':<35s} {'Recall':>8s} {'MRR':>8s} {'Latency':>10s} {'Search':>8s}")
-    print(f"  {'-'*72}")
+    config_width = max(len("Config"), *(len(name) for name in results))
+    header = (
+        f"  {'Config':<{config_width}s} {'Recall':>8s} {'MRR':>8s} "
+        f"{'Latency':>10s} {'Search':>8s}"
+    )
+    print(f"\n{header}")
+    print(f"  {'-' * (len(header) - 2)}")
     for name, r in results.items():
-        print(f"  {name:<35s} {r['recall@10']:>8.4f} {r['mrr']:>8.4f} "
-              f"{r['mean_latency_ms']:>9.1f}ms {r['search_device']:>8s}")
+        print(
+            f"  {name:<{config_width}s} {r['recall@10']:>8.4f} {r['mrr']:>8.4f} "
+            f"{r['mean_latency_ms']:>9.1f}ms {r['search_device']:>8s}"
+        )
 
     return results
 
