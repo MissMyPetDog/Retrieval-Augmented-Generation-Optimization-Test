@@ -327,6 +327,54 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
         f"({result_ivf_cached_py['mean_latency_ms']/result_ivf_batch['mean_latency_ms']:.2f}x)"
     )
 
+    # ── IVF + Numba parallel [CPU search] ──
+    try:
+        from optimized.similarity_numba import cosine_sim_numba_parallel, warmup_numba
+        warmup_numba()
+
+        ivf.use_numpy_candidate_gather = True
+        retriever_numba_ivf = Retriever(
+            index=ivf,
+            embedder=embedder,
+            sim_fn=cosine_sim_numba_parallel,
+        )
+
+        result_ivf_numba = evaluate_retriever(
+            retriever_numba_ivf,
+            queries,
+            chunk_lookup=chunk_lookup,
+        )
+        results[f"IVF({n_clusters},8) + Numba parallel (np gather)"] = {
+            "recall@10": result_ivf_numba["mean_recall@k"],
+            "mrr": result_ivf_numba["mean_mrr"],
+            "mean_latency_ms": result_ivf_numba["mean_latency_ms"],
+            "p95_latency_ms": result_ivf_numba["p95_latency_ms"],
+            "search_device": "cpu",
+            "embed_device": device,
+        }
+
+        result_ivf_numba_batch = evaluate_retriever(
+            retriever_numba_ivf,
+            queries,
+            chunk_lookup=chunk_lookup,
+            use_batch_embedding=True,
+        )
+        results[f"IVF({n_clusters},8) + Numba parallel (np gather, batch embed)"] = {
+            "recall@10": result_ivf_numba_batch["mean_recall@k"],
+            "mrr": result_ivf_numba_batch["mean_mrr"],
+            "mean_latency_ms": result_ivf_numba_batch["mean_latency_ms"],
+            "p95_latency_ms": result_ivf_numba_batch["p95_latency_ms"],
+            "search_device": "cpu",
+            "embed_device": device,
+        }
+        print(
+            f"    Numba+batch latency: {result_ivf_numba['mean_latency_ms']:.1f}ms -> "
+            f"{result_ivf_numba_batch['mean_latency_ms']:.1f}ms "
+            f"({result_ivf_numba['mean_latency_ms']/result_ivf_numba_batch['mean_latency_ms']:.2f}x)"
+        )
+    except ImportError:
+        pass
+
     # ── Summary ──
     print(f"\n  {'Config':<35s} {'Recall':>8s} {'MRR':>8s} {'Latency':>10s} {'Search':>8s}")
     print(f"  {'-'*72}")
