@@ -44,6 +44,7 @@ def evaluate_retriever(
     queries: list[dict],
     chunk_lookup: Optional[dict] = None,
     k: int = config.TOP_K,
+    use_batch_embedding: bool = False,
 ) -> dict:
     """
     Evaluate a retriever on a set of queries with relevance judgments.
@@ -63,8 +64,14 @@ def evaluate_retriever(
     latencies = []
     details = []
 
-    for i, q in enumerate(queries):
-        result = retriever.retrieve(q["text"])
+    if use_batch_embedding:
+        query_texts = [q["text"] for q in queries]
+        batch_results = retriever.retrieve_batch(query_texts, use_batch_embedding=True)
+        iterator = enumerate(zip(queries, batch_results))
+    else:
+        iterator = enumerate((q, retriever.retrieve(q["text"])) for q in queries)
+
+    for i, (q, result) in iterator:
 
         retrieved_ids = [doc_id for doc_id, _ in result["results"]]
 

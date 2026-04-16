@@ -244,11 +244,9 @@ class IVFIndex:
         candidate_indices = []
         for cluster_id in top_clusters:
             candidate_indices.extend(self.inverted_lists[int(cluster_id)])
-
         if not candidate_indices:
             return []
-
-        candidate_indices = np.array(candidate_indices)
+        candidate_indices = np.array(candidate_indices, dtype=np.int32)
         candidate_vectors = self.vectors[candidate_indices]
         candidate_norms = (
             self.vector_norms[candidate_indices]

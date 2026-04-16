@@ -275,32 +275,39 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
     ivf.build(vectors, doc_ids)
     retriever = Retriever(index=ivf, embedder=embedder, sim_fn=cosine_sim_numpy)
 
-    ivf.use_precomputed_norms = False
-    result_ivf_legacy = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
-    results[f"IVF({n_clusters},8) + NumPy (no norm cache)"] = {
-        "recall@10": result_ivf_legacy["mean_recall@k"],
-        "mrr": result_ivf_legacy["mean_mrr"],
-        "mean_latency_ms": result_ivf_legacy["mean_latency_ms"],
-        "p95_latency_ms": result_ivf_legacy["p95_latency_ms"],
-        "search_device": "cpu",
-        "embed_device": device,
-    }
-
     ivf.use_precomputed_norms = True
-    result_ivf_cached = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
+    result_ivf_cached_py = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
     results[f"IVF({n_clusters},8) + NumPy (norm cache)"] = {
-        "recall@10": result_ivf_cached["mean_recall@k"],
-        "mrr": result_ivf_cached["mean_mrr"],
-        "mean_latency_ms": result_ivf_cached["mean_latency_ms"],
-        "p95_latency_ms": result_ivf_cached["p95_latency_ms"],
+        "recall@10": result_ivf_cached_py["mean_recall@k"],
+        "mrr": result_ivf_cached_py["mean_mrr"],
+        "mean_latency_ms": result_ivf_cached_py["mean_latency_ms"],
+        "p95_latency_ms": result_ivf_cached_py["p95_latency_ms"],
         "search_device": "cpu",
         "embed_device": device,
     }
-    print(f"    Recall@10: {result_ivf_cached['mean_recall@k']:.4f}")
+    print(f"    Recall@10: {result_ivf_cached_py['mean_recall@k']:.4f}")
+    print(f"    Latency:   {result_ivf_cached_py['mean_latency_ms']:.1f}ms mean")
+
+    # ── IVF + NumPy + batch query embedding (throughput optimization) ──
+    result_ivf_batch = evaluate_retriever(
+        retriever,
+        queries,
+        chunk_lookup=chunk_lookup,
+        use_batch_embedding=True,
+    )
+    results[f"IVF({n_clusters},8) + NumPy (norm cache, batch embed)"] = {
+        "recall@10": result_ivf_batch["mean_recall@k"],
+        "mrr": result_ivf_batch["mean_mrr"],
+        "mean_latency_ms": result_ivf_batch["mean_latency_ms"],
+        "p95_latency_ms": result_ivf_batch["p95_latency_ms"],
+        "search_device": "cpu",
+        "embed_device": device,
+    }
     print(
-        f"    Latency:   {result_ivf_legacy['mean_latency_ms']:.1f}ms -> "
-        f"{result_ivf_cached['mean_latency_ms']:.1f}ms "
-        f"({result_ivf_legacy['mean_latency_ms']/result_ivf_cached['mean_latency_ms']:.2f}x)"
+        f"    Batch embed latency: "
+        f"{result_ivf_cached_py['mean_latency_ms']:.1f}ms -> "
+        f"{result_ivf_batch['mean_latency_ms']:.1f}ms "
+        f"({result_ivf_cached_py['mean_latency_ms']/result_ivf_batch['mean_latency_ms']:.2f}x)"
     )
 
     # ── Summary ──

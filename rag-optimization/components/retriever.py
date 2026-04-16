@@ -53,6 +53,40 @@ class Retriever:
             "timings": timings,
         }
 
-    def retrieve_batch(self, queries: list[str]) -> list[dict]:
-        """Retrieve for a batch of queries. Baseline: sequential."""
-        return [self.retrieve(q) for q in queries]
+    def retrieve_batch(
+        self,
+        queries: list[str],
+        use_batch_embedding: bool = False,
+    ) -> list[dict]:
+        """
+        Retrieve for a batch of queries.
+        If use_batch_embedding=True, embed queries in one batch call.
+        """
+        if not use_batch_embedding:
+            return [self.retrieve(q) for q in queries]
+
+        if not hasattr(self.embedder, "embed_texts"):
+            return [self.retrieve(q) for q in queries]
+
+        t0 = time.perf_counter()
+        query_vectors = self.embedder.embed_texts(queries, show_progress=False)
+        total_embed_ms = (time.perf_counter() - t0) * 1000
+        per_query_embed_ms = total_embed_ms / max(len(queries), 1)
+
+        outputs = []
+        for query, query_vec in zip(queries, query_vectors):
+            t0 = time.perf_counter()
+            results = self.index.search(query_vec, k=self.top_k, sim_fn=self.sim_fn)
+            search_ms = (time.perf_counter() - t0) * 1000
+            outputs.append(
+                {
+                    "query": query,
+                    "results": results,
+                    "timings": {
+                        "embed_ms": per_query_embed_ms,
+                        "search_ms": search_ms,
+                        "total_ms": per_query_embed_ms + search_ms,
+                    },
+                }
+            )
+        return outputs
