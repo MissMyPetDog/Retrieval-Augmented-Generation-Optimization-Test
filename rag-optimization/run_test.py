@@ -224,7 +224,11 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
 
     # ── BruteForce + Numba parallel [CPU search] ──
     try:
-        from optimized.similarity_numba import cosine_sim_numba_parallel, warmup_numba
+        from optimized.similarity_numba import (
+            cosine_sim_numba_parallel,
+            cosine_sim_numba_parallel_precomputed,
+            warmup_numba,
+        )
         warmup_numba()
         print(f"\n  === BruteForce + Numba parallel [CPU search] ===")
         retriever = Retriever(index=bf, embedder=embedder, sim_fn=cosine_sim_numba_parallel)
@@ -333,6 +337,7 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
         warmup_numba()
 
         ivf.use_numpy_candidate_gather = True
+        ivf.use_precomputed_norms = False
         retriever_numba_ivf = Retriever(
             index=ivf,
             embedder=embedder,
@@ -344,7 +349,7 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
             queries,
             chunk_lookup=chunk_lookup,
         )
-        results[f"IVF({n_clusters},8) + Numba parallel (np gather)"] = {
+        results[f"IVF({n_clusters},8) + Numba parallel (np gather, no norm cache)"] = {
             "recall@10": result_ivf_numba["mean_recall@k"],
             "mrr": result_ivf_numba["mean_mrr"],
             "mean_latency_ms": result_ivf_numba["mean_latency_ms"],
@@ -353,13 +358,33 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
             "embed_device": device,
         }
 
+        ivf.use_precomputed_norms = True
+        retriever_numba_ivf_cached = Retriever(
+            index=ivf,
+            embedder=embedder,
+            sim_fn=cosine_sim_numba_parallel_precomputed,
+        )
+        result_ivf_numba_cached = evaluate_retriever(
+            retriever_numba_ivf_cached,
+            queries,
+            chunk_lookup=chunk_lookup,
+        )
+        results[f"IVF({n_clusters},8) + Numba parallel (np gather, norm cache)"] = {
+            "recall@10": result_ivf_numba_cached["mean_recall@k"],
+            "mrr": result_ivf_numba_cached["mean_mrr"],
+            "mean_latency_ms": result_ivf_numba_cached["mean_latency_ms"],
+            "p95_latency_ms": result_ivf_numba_cached["p95_latency_ms"],
+            "search_device": "cpu",
+            "embed_device": device,
+        }
+
         result_ivf_numba_batch = evaluate_retriever(
-            retriever_numba_ivf,
+            retriever_numba_ivf_cached,
             queries,
             chunk_lookup=chunk_lookup,
             use_batch_embedding=True,
         )
-        results[f"IVF({n_clusters},8) + Numba parallel (np gather, batch embed)"] = {
+        results[f"IVF({n_clusters},8) + Numba parallel (np gather, norm cache, batch embed)"] = {
             "recall@10": result_ivf_numba_batch["mean_recall@k"],
             "mrr": result_ivf_numba_batch["mean_mrr"],
             "mean_latency_ms": result_ivf_numba_batch["mean_latency_ms"],
@@ -368,9 +393,14 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
             "embed_device": device,
         }
         print(
-            f"    Numba+batch latency: {result_ivf_numba['mean_latency_ms']:.1f}ms -> "
+            f"    Numba norm-cache latency: {result_ivf_numba['mean_latency_ms']:.1f}ms -> "
+            f"{result_ivf_numba_cached['mean_latency_ms']:.1f}ms "
+            f"({result_ivf_numba['mean_latency_ms']/result_ivf_numba_cached['mean_latency_ms']:.2f}x)"
+        )
+        print(
+            f"    Numba+batch latency: {result_ivf_numba_cached['mean_latency_ms']:.1f}ms -> "
             f"{result_ivf_numba_batch['mean_latency_ms']:.1f}ms "
-            f"({result_ivf_numba['mean_latency_ms']/result_ivf_numba_batch['mean_latency_ms']:.2f}x)"
+            f"({result_ivf_numba_cached['mean_latency_ms']/result_ivf_numba_batch['mean_latency_ms']:.2f}x)"
         )
     except ImportError:
         pass

@@ -62,6 +62,10 @@ class BruteForceIndex:
         denom = np.where(denom == 0, 1e-10, denom)
         return dots / denom
 
+    @staticmethod
+    def _supports_precomputed_norms(sim_fn) -> bool:
+        return bool(getattr(sim_fn, "uses_precomputed_norms", False))
+
     def search(
         self,
         query_vec: np.ndarray,
@@ -76,10 +80,15 @@ class BruteForceIndex:
         if use_precomputed_norms is None:
             use_precomputed_norms = self.use_precomputed_norms
 
-        if use_precomputed_norms and sim_fn is cosine_sim_numpy and self.vector_norms is not None:
-            scores = self._cosine_sim_with_precomputed_norms(
-                query_vec, self.vectors, self.vector_norms
-            )
+        if use_precomputed_norms and self.vector_norms is not None:
+            if sim_fn is cosine_sim_numpy:
+                scores = self._cosine_sim_with_precomputed_norms(
+                    query_vec, self.vectors, self.vector_norms
+                )
+            elif self._supports_precomputed_norms(sim_fn):
+                scores = sim_fn(query_vec, self.vectors, self.vector_norms)
+            else:
+                scores = sim_fn(query_vec, self.vectors)
         else:
             scores = sim_fn(query_vec, self.vectors)
         top = top_k_numpy(scores, k)
@@ -240,10 +249,15 @@ class IVFIndex:
             use_numpy_candidate_gather = self.use_numpy_candidate_gather
 
         # Step 1: Find the closest clusters to query
-        if use_precomputed_norms and sim_fn is cosine_sim_numpy and self.centroid_norms is not None:
-            centroid_scores = BruteForceIndex._cosine_sim_with_precomputed_norms(
-                query_vec, self.centroids, self.centroid_norms
-            )
+        if use_precomputed_norms and self.centroid_norms is not None:
+            if sim_fn is cosine_sim_numpy:
+                centroid_scores = BruteForceIndex._cosine_sim_with_precomputed_norms(
+                    query_vec, self.centroids, self.centroid_norms
+                )
+            elif BruteForceIndex._supports_precomputed_norms(sim_fn):
+                centroid_scores = sim_fn(query_vec, self.centroids, self.centroid_norms)
+            else:
+                centroid_scores = sim_fn(query_vec, self.centroids)
         else:
             centroid_scores = sim_fn(query_vec, self.centroids)
         top_clusters = np.argpartition(centroid_scores, -n_probes)[-n_probes:]
@@ -270,10 +284,15 @@ class IVFIndex:
         )
 
         # Step 3: Score candidates
-        if use_precomputed_norms and sim_fn is cosine_sim_numpy and candidate_norms is not None:
-            scores = BruteForceIndex._cosine_sim_with_precomputed_norms(
-                query_vec, candidate_vectors, candidate_norms
-            )
+        if use_precomputed_norms and candidate_norms is not None:
+            if sim_fn is cosine_sim_numpy:
+                scores = BruteForceIndex._cosine_sim_with_precomputed_norms(
+                    query_vec, candidate_vectors, candidate_norms
+                )
+            elif BruteForceIndex._supports_precomputed_norms(sim_fn):
+                scores = sim_fn(query_vec, candidate_vectors, candidate_norms)
+            else:
+                scores = sim_fn(query_vec, candidate_vectors)
         else:
             scores = sim_fn(query_vec, candidate_vectors)
         top = top_k_numpy(scores, k)

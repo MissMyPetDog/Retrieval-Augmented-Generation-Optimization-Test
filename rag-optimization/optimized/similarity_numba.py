@@ -90,6 +90,41 @@ def cosine_sim_numba_parallel(query_vec, corpus_matrix):
     return scores
 
 
+@njit(parallel=True, cache=True)
+def cosine_sim_numba_parallel_precomputed(query_vec, corpus_matrix, corpus_norms):
+    """
+    Numba parallel cosine similarity using precomputed corpus norms.
+    """
+    n = corpus_matrix.shape[0]
+    d = corpus_matrix.shape[1]
+    scores = np.empty(n, dtype=np.float64)
+
+    q_norm = 0.0
+    for j in range(d):
+        q_norm += query_vec[j] * query_vec[j]
+    q_norm = np.sqrt(q_norm)
+
+    if q_norm == 0.0:
+        return np.zeros(n, dtype=np.float64)
+
+    for i in prange(n):
+        dot = 0.0
+        for j in range(d):
+            dot += query_vec[j] * corpus_matrix[i, j]
+
+        c_norm = corpus_norms[i]
+        if c_norm == 0.0:
+            scores[i] = 0.0
+        else:
+            scores[i] = dot / (q_norm * c_norm)
+
+    return scores
+
+
+# Hint for index.search(): this function accepts precomputed norms.
+cosine_sim_numba_parallel_precomputed.uses_precomputed_norms = True
+
+
 # ──────────────────────────────────────────────
 # Warmup helper
 # ──────────────────────────────────────────────
@@ -101,8 +136,10 @@ def warmup_numba():
     """
     dummy_q = np.random.randn(384).astype(np.float32)
     dummy_c = np.random.randn(10, 384).astype(np.float32)
+    dummy_norms = np.linalg.norm(dummy_c, axis=1)
     cosine_sim_numba(dummy_q, dummy_c)
     cosine_sim_numba_parallel(dummy_q, dummy_c)
+    cosine_sim_numba_parallel_precomputed(dummy_q, dummy_c, dummy_norms)
     print("Numba JIT warmup complete.")
 
 
