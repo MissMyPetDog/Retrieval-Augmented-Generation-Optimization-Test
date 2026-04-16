@@ -129,9 +129,11 @@ class IVFIndex:
         self.centroids: Optional[np.ndarray] = None   # (K, D)
         self.centroid_norms: Optional[np.ndarray] = None  # (K,)
         self.inverted_lists: dict[int, list[int]] = {} # cluster_id -> [vec indices]
+        self.inverted_arrays: dict[int, np.ndarray] = {}
         self.vectors: Optional[np.ndarray] = None
         self.vector_norms: Optional[np.ndarray] = None  # (N,)
         self.use_precomputed_norms: bool = True
+        self.use_numpy_candidate_gather: bool = False
         self.doc_ids: list[str] = []
         self.build_time: float = 0.0
 
@@ -206,6 +208,9 @@ class IVFIndex:
         self.inverted_lists = {k: [] for k in range(self.n_clusters)}
         for i, cluster_id in enumerate(assignments):
             self.inverted_lists[int(cluster_id)].append(i)
+        self.inverted_arrays = {
+            k: np.array(v, dtype=np.int32) for k, v in self.inverted_lists.items()
+        }
 
         self.build_time = time.perf_counter() - t0
 
@@ -222,6 +227,7 @@ class IVFIndex:
         n_probes: Optional[int] = None,
         sim_fn=cosine_sim_numpy,
         use_precomputed_norms: Optional[bool] = None,
+        use_numpy_candidate_gather: Optional[bool] = None,
     ) -> list[tuple[str, float]]:
         """
         Search: find nearest clusters, then search within them.
@@ -230,6 +236,8 @@ class IVFIndex:
             n_probes = self.n_probes
         if use_precomputed_norms is None:
             use_precomputed_norms = self.use_precomputed_norms
+        if use_numpy_candidate_gather is None:
+            use_numpy_candidate_gather = self.use_numpy_candidate_gather
 
         # Step 1: Find the closest clusters to query
         if use_precomputed_norms and sim_fn is cosine_sim_numpy and self.centroid_norms is not None:
@@ -241,12 +249,19 @@ class IVFIndex:
         top_clusters = np.argpartition(centroid_scores, -n_probes)[-n_probes:]
 
         # Step 2: Gather candidate vectors from those clusters
-        candidate_indices = []
-        for cluster_id in top_clusters:
-            candidate_indices.extend(self.inverted_lists[int(cluster_id)])
-        if not candidate_indices:
-            return []
-        candidate_indices = np.array(candidate_indices, dtype=np.int32)
+        if use_numpy_candidate_gather and self.inverted_arrays:
+            arrays = [self.inverted_arrays[int(cluster_id)] for cluster_id in top_clusters]
+            arrays = [arr for arr in arrays if arr.size > 0]
+            if not arrays:
+                return []
+            candidate_indices = np.concatenate(arrays)
+        else:
+            candidate_indices = []
+            for cluster_id in top_clusters:
+                candidate_indices.extend(self.inverted_lists[int(cluster_id)])
+            if not candidate_indices:
+                return []
+            candidate_indices = np.array(candidate_indices, dtype=np.int32)
         candidate_vectors = self.vectors[candidate_indices]
         candidate_norms = (
             self.vector_norms[candidate_indices]
@@ -289,6 +304,9 @@ class IVFIndex:
         if self.centroid_norms is None and self.centroids is not None:
             self.centroid_norms = np.linalg.norm(self.centroids, axis=1).astype(np.float32)
         self.inverted_lists = data["inverted_lists"]
+        self.inverted_arrays = {
+            k: np.array(v, dtype=np.int32) for k, v in self.inverted_lists.items()
+        }
         self.vectors = data["vectors"]
         self.vector_norms = data.get("vector_norms")
         if self.vector_norms is None and self.vectors is not None:
