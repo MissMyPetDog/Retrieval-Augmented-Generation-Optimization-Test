@@ -1,0 +1,11 @@
+# Python cache artifacts
+__pycache__/
+*.py[cod]
+
+# Generated RAG run outputs
+rag-optimization/data/small/
+rag-optimization/data/medium/
+rag-optimization/data/large/
+rag-optimization/data/passages.jsonl
+rag-optimization/data/queries.jsonl
+rag-optimization/timings_baseline.json

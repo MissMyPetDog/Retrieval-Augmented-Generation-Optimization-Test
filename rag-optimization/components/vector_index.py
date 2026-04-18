@@ -32,6 +32,8 @@ class BruteForceIndex:
 
     def __init__(self):
         self.vectors: Optional[np.ndarray] = None   # (N, D)
+        self.vector_norms: Optional[np.ndarray] = None  # (N,)
+        self.use_precomputed_norms: bool = True
         self.doc_ids: list[str] = []
         self.build_time: float = 0.0
 
@@ -39,32 +41,78 @@ class BruteForceIndex:
         """Store all vectors. 'Building' is just a memcopy here."""
         t0 = time.perf_counter()
         self.vectors = vectors.astype(np.float32)
+        self.vector_norms = np.linalg.norm(self.vectors, axis=1).astype(np.float32)
         self.doc_ids = doc_ids
         self.build_time = time.perf_counter() - t0
         print(f"BruteForceIndex built: {len(doc_ids)} vectors in {self.build_time:.3f}s")
+
+    @staticmethod
+    def _cosine_sim_with_precomputed_norms(
+        query_vec: np.ndarray,
+        corpus_matrix: np.ndarray,
+        corpus_norms: np.ndarray,
+    ) -> np.ndarray:
+        """Cosine similarity using cached corpus norms."""
+        dots = corpus_matrix @ query_vec
+        q_norm = np.linalg.norm(query_vec)
+        if q_norm == 0:
+            return np.zeros(corpus_matrix.shape[0], dtype=np.float32)
+
+        denom = q_norm * corpus_norms
+        denom = np.where(denom == 0, 1e-10, denom)
+        return dots / denom
+
+    @staticmethod
+    def _supports_precomputed_norms(sim_fn) -> bool:
+        return bool(getattr(sim_fn, "uses_precomputed_norms", False))
 
     def search(
         self,
         query_vec: np.ndarray,
         k: int = config.TOP_K,
         sim_fn=cosine_sim_numpy,
+        use_precomputed_norms: Optional[bool] = None,
     ) -> list[tuple[str, float]]:
         """
         Search for top-K nearest neighbors.
         sim_fn is swappable: pass cosine_sim_cython, cosine_sim_numba, etc.
         """
-        scores = sim_fn(query_vec, self.vectors)
+        if use_precomputed_norms is None:
+            use_precomputed_norms = self.use_precomputed_norms
+
+        if use_precomputed_norms and self.vector_norms is not None:
+            if sim_fn is cosine_sim_numpy:
+                scores = self._cosine_sim_with_precomputed_norms(
+                    query_vec, self.vectors, self.vector_norms
+                )
+            elif self._supports_precomputed_norms(sim_fn):
+                scores = sim_fn(query_vec, self.vectors, self.vector_norms)
+            else:
+                scores = sim_fn(query_vec, self.vectors)
+        else:
+            scores = sim_fn(query_vec, self.vectors)
         top = top_k_numpy(scores, k)
         return [(self.doc_ids[idx], score) for idx, score in top]
 
     def save(self, path: str):
         with open(path, "wb") as f:
-            pickle.dump({"vectors": self.vectors, "doc_ids": self.doc_ids}, f)
+            pickle.dump(
+                {
+                    "vectors": self.vectors,
+                    "vector_norms": self.vector_norms,
+                    "doc_ids": self.doc_ids,
+                },
+                f,
+            )
 
     def load(self, path: str):
         with open(path, "rb") as f:
             data = pickle.load(f)
         self.vectors = data["vectors"]
+        self.vector_norms = data.get("vector_norms")
+        if self.vector_norms is None and self.vectors is not None:
+            # Backward-compatible loading for older pickle files.
+            self.vector_norms = np.linalg.norm(self.vectors, axis=1).astype(np.float32)
         self.doc_ids = data["doc_ids"]
 
 
@@ -88,8 +136,13 @@ class IVFIndex:
         self.kmeans_iters = kmeans_iters
 
         self.centroids: Optional[np.ndarray] = None   # (K, D)
+        self.centroid_norms: Optional[np.ndarray] = None  # (K,)
         self.inverted_lists: dict[int, list[int]] = {} # cluster_id -> [vec indices]
+        self.inverted_arrays: dict[int, np.ndarray] = {}
         self.vectors: Optional[np.ndarray] = None
+        self.vector_norms: Optional[np.ndarray] = None  # (N,)
+        self.use_precomputed_norms: bool = True
+        self.use_numpy_candidate_gather: bool = False
         self.doc_ids: list[str] = []
         self.build_time: float = 0.0
 
@@ -143,6 +196,7 @@ class IVFIndex:
         t0 = time.perf_counter()
 
         self.vectors = vectors.astype(np.float32)
+        self.vector_norms = np.linalg.norm(self.vectors, axis=1).astype(np.float32)
         self.doc_ids = doc_ids
         n = len(vectors)
 
@@ -150,18 +204,22 @@ class IVFIndex:
 
         # Step 1: K-Means clustering
         self.centroids = self._kmeans(self.vectors)
+        self.centroid_norms = np.linalg.norm(self.centroids, axis=1).astype(np.float32)
 
         # Step 2: Assign each vector to its nearest cluster
         dots = self.vectors @ self.centroids.T
-        c_norms = np.linalg.norm(self.centroids, axis=1)
-        v_norms = np.linalg.norm(self.vectors, axis=1, keepdims=True)
-        cos_sim = dots / (v_norms * c_norms[np.newaxis, :] + 1e-10)
+        v_norms = self.vector_norms[:, np.newaxis]
+        c_norms = self.centroid_norms[np.newaxis, :]
+        cos_sim = dots / (v_norms * c_norms + 1e-10)
         assignments = np.argmax(cos_sim, axis=1)
 
         # Step 3: Build inverted lists
         self.inverted_lists = {k: [] for k in range(self.n_clusters)}
         for i, cluster_id in enumerate(assignments):
             self.inverted_lists[int(cluster_id)].append(i)
+        self.inverted_arrays = {
+            k: np.array(v, dtype=np.int32) for k, v in self.inverted_lists.items()
+        }
 
         self.build_time = time.perf_counter() - t0
 
@@ -177,30 +235,66 @@ class IVFIndex:
         k: int = config.TOP_K,
         n_probes: Optional[int] = None,
         sim_fn=cosine_sim_numpy,
+        use_precomputed_norms: Optional[bool] = None,
+        use_numpy_candidate_gather: Optional[bool] = None,
     ) -> list[tuple[str, float]]:
         """
         Search: find nearest clusters, then search within them.
         """
         if n_probes is None:
             n_probes = self.n_probes
+        if use_precomputed_norms is None:
+            use_precomputed_norms = self.use_precomputed_norms
+        if use_numpy_candidate_gather is None:
+            use_numpy_candidate_gather = self.use_numpy_candidate_gather
 
         # Step 1: Find the closest clusters to query
-        centroid_scores = sim_fn(query_vec, self.centroids)
+        if use_precomputed_norms and self.centroid_norms is not None:
+            if sim_fn is cosine_sim_numpy:
+                centroid_scores = BruteForceIndex._cosine_sim_with_precomputed_norms(
+                    query_vec, self.centroids, self.centroid_norms
+                )
+            elif BruteForceIndex._supports_precomputed_norms(sim_fn):
+                centroid_scores = sim_fn(query_vec, self.centroids, self.centroid_norms)
+            else:
+                centroid_scores = sim_fn(query_vec, self.centroids)
+        else:
+            centroid_scores = sim_fn(query_vec, self.centroids)
         top_clusters = np.argpartition(centroid_scores, -n_probes)[-n_probes:]
 
         # Step 2: Gather candidate vectors from those clusters
-        candidate_indices = []
-        for cluster_id in top_clusters:
-            candidate_indices.extend(self.inverted_lists[int(cluster_id)])
-
-        if not candidate_indices:
-            return []
-
-        candidate_indices = np.array(candidate_indices)
+        if use_numpy_candidate_gather and self.inverted_arrays:
+            arrays = [self.inverted_arrays[int(cluster_id)] for cluster_id in top_clusters]
+            arrays = [arr for arr in arrays if arr.size > 0]
+            if not arrays:
+                return []
+            candidate_indices = np.concatenate(arrays)
+        else:
+            candidate_indices = []
+            for cluster_id in top_clusters:
+                candidate_indices.extend(self.inverted_lists[int(cluster_id)])
+            if not candidate_indices:
+                return []
+            candidate_indices = np.array(candidate_indices, dtype=np.int32)
         candidate_vectors = self.vectors[candidate_indices]
+        candidate_norms = (
+            self.vector_norms[candidate_indices]
+            if self.vector_norms is not None
+            else None
+        )
 
         # Step 3: Score candidates
-        scores = sim_fn(query_vec, candidate_vectors)
+        if use_precomputed_norms and candidate_norms is not None:
+            if sim_fn is cosine_sim_numpy:
+                scores = BruteForceIndex._cosine_sim_with_precomputed_norms(
+                    query_vec, candidate_vectors, candidate_norms
+                )
+            elif BruteForceIndex._supports_precomputed_norms(sim_fn):
+                scores = sim_fn(query_vec, candidate_vectors, candidate_norms)
+            else:
+                scores = sim_fn(query_vec, candidate_vectors)
+        else:
+            scores = sim_fn(query_vec, candidate_vectors)
         top = top_k_numpy(scores, k)
 
         return [
@@ -212,8 +306,10 @@ class IVFIndex:
         with open(path, "wb") as f:
             pickle.dump({
                 "centroids": self.centroids,
+                "centroid_norms": self.centroid_norms,
                 "inverted_lists": self.inverted_lists,
                 "vectors": self.vectors,
+                "vector_norms": self.vector_norms,
                 "doc_ids": self.doc_ids,
                 "n_clusters": self.n_clusters,
                 "n_probes": self.n_probes,
@@ -223,8 +319,18 @@ class IVFIndex:
         with open(path, "rb") as f:
             data = pickle.load(f)
         self.centroids = data["centroids"]
+        self.centroid_norms = data.get("centroid_norms")
+        if self.centroid_norms is None and self.centroids is not None:
+            self.centroid_norms = np.linalg.norm(self.centroids, axis=1).astype(np.float32)
         self.inverted_lists = data["inverted_lists"]
+        self.inverted_arrays = {
+            k: np.array(v, dtype=np.int32) for k, v in self.inverted_lists.items()
+        }
         self.vectors = data["vectors"]
+        self.vector_norms = data.get("vector_norms")
+        if self.vector_norms is None and self.vectors is not None:
+            # Backward-compatible loading for older pickle files.
+            self.vector_norms = np.linalg.norm(self.vectors, axis=1).astype(np.float32)
         self.doc_ids = data["doc_ids"]
         self.n_clusters = data["n_clusters"]
         self.n_probes = data["n_probes"]

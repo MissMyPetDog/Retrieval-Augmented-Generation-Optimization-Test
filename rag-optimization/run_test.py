@@ -192,22 +192,43 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
     bf = BruteForceIndex()
     bf.build(vectors, doc_ids)
     retriever = Retriever(index=bf, embedder=embedder, sim_fn=cosine_sim_numpy)
-    result = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
-    results["BruteForce + NumPy"] = {
-        "recall@10": result["mean_recall@k"],
-        "mrr": result["mean_mrr"],
-        "mean_latency_ms": result["mean_latency_ms"],
-        "p95_latency_ms": result["p95_latency_ms"],
+
+    bf.use_precomputed_norms = False
+    result_bf_legacy = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
+    results["BruteForce + NumPy (no norm cache)"] = {
+        "recall@10": result_bf_legacy["mean_recall@k"],
+        "mrr": result_bf_legacy["mean_mrr"],
+        "mean_latency_ms": result_bf_legacy["mean_latency_ms"],
+        "p95_latency_ms": result_bf_legacy["p95_latency_ms"],
         "search_device": "cpu",
         "embed_device": device,
     }
-    print(f"    Recall@10: {result['mean_recall@k']:.4f}")
-    print(f"    MRR:       {result['mean_mrr']:.4f}")
-    print(f"    Latency:   {result['mean_latency_ms']:.1f}ms mean")
+
+    bf.use_precomputed_norms = True
+    result_bf_cached = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
+    results["BruteForce + NumPy (norm cache)"] = {
+        "recall@10": result_bf_cached["mean_recall@k"],
+        "mrr": result_bf_cached["mean_mrr"],
+        "mean_latency_ms": result_bf_cached["mean_latency_ms"],
+        "p95_latency_ms": result_bf_cached["p95_latency_ms"],
+        "search_device": "cpu",
+        "embed_device": device,
+    }
+    print(f"    Recall@10: {result_bf_cached['mean_recall@k']:.4f}")
+    print(f"    MRR:       {result_bf_cached['mean_mrr']:.4f}")
+    print(
+        f"    Latency:   {result_bf_legacy['mean_latency_ms']:.1f}ms -> "
+        f"{result_bf_cached['mean_latency_ms']:.1f}ms "
+        f"({result_bf_legacy['mean_latency_ms']/result_bf_cached['mean_latency_ms']:.2f}x)"
+    )
 
     # ── BruteForce + Numba parallel [CPU search] ──
     try:
-        from optimized.similarity_numba import cosine_sim_numba_parallel, warmup_numba
+        from optimized.similarity_numba import (
+            cosine_sim_numba_parallel,
+            cosine_sim_numba_parallel_precomputed,
+            warmup_numba,
+        )
         warmup_numba()
         print(f"\n  === BruteForce + Numba parallel [CPU search] ===")
         retriever = Retriever(index=bf, embedder=embedder, sim_fn=cosine_sim_numba_parallel)
@@ -257,24 +278,174 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
     ivf = IVFIndex(n_clusters=n_clusters, n_probes=8)
     ivf.build(vectors, doc_ids)
     retriever = Retriever(index=ivf, embedder=embedder, sim_fn=cosine_sim_numpy)
-    result = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
-    results[f"IVF({n_clusters},8) + NumPy"] = {
-        "recall@10": result["mean_recall@k"],
-        "mrr": result["mean_mrr"],
-        "mean_latency_ms": result["mean_latency_ms"],
-        "p95_latency_ms": result["p95_latency_ms"],
+
+    ivf.use_precomputed_norms = False
+    ivf.use_numpy_candidate_gather = False
+    result_ivf_baseline = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
+    results[f"IVF({n_clusters},8) + NumPy (baseline)"] = {
+        "recall@10": result_ivf_baseline["mean_recall@k"],
+        "mrr": result_ivf_baseline["mean_mrr"],
+        "mean_latency_ms": result_ivf_baseline["mean_latency_ms"],
+        "p95_latency_ms": result_ivf_baseline["p95_latency_ms"],
         "search_device": "cpu",
         "embed_device": device,
     }
-    print(f"    Recall@10: {result['mean_recall@k']:.4f}")
-    print(f"    Latency:   {result['mean_latency_ms']:.1f}ms mean")
+
+    ivf.use_precomputed_norms = True
+    ivf.use_numpy_candidate_gather = False
+    result_ivf_cached_py = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
+    results[f"IVF({n_clusters},8) + NumPy (norm cache)"] = {
+        "recall@10": result_ivf_cached_py["mean_recall@k"],
+        "mrr": result_ivf_cached_py["mean_mrr"],
+        "mean_latency_ms": result_ivf_cached_py["mean_latency_ms"],
+        "p95_latency_ms": result_ivf_cached_py["p95_latency_ms"],
+        "search_device": "cpu",
+        "embed_device": device,
+    }
+
+    ivf.use_numpy_candidate_gather = True
+    result_ivf_cached_np = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
+    results[f"IVF({n_clusters},8) + NumPy (norm cache, np gather)"] = {
+        "recall@10": result_ivf_cached_np["mean_recall@k"],
+        "mrr": result_ivf_cached_np["mean_mrr"],
+        "mean_latency_ms": result_ivf_cached_np["mean_latency_ms"],
+        "p95_latency_ms": result_ivf_cached_np["p95_latency_ms"],
+        "search_device": "cpu",
+        "embed_device": device,
+    }
+    print(f"    Recall@10: {result_ivf_cached_np['mean_recall@k']:.4f}")
+    print(
+        f"    Gather latency: {result_ivf_cached_py['mean_latency_ms']:.1f}ms -> "
+        f"{result_ivf_cached_np['mean_latency_ms']:.1f}ms "
+        f"({result_ivf_cached_py['mean_latency_ms']/result_ivf_cached_np['mean_latency_ms']:.2f}x)"
+    )
+
+    # ── IVF + NumPy + batch query embedding (throughput optimization) ──
+    ivf.use_numpy_candidate_gather = False
+    result_ivf_batch_no_np_gather = evaluate_retriever(
+        retriever,
+        queries,
+        chunk_lookup=chunk_lookup,
+        use_batch_embedding=True,
+    )
+    results[f"IVF({n_clusters},8) + NumPy (norm cache, batch embed)"] = {
+        "recall@10": result_ivf_batch_no_np_gather["mean_recall@k"],
+        "mrr": result_ivf_batch_no_np_gather["mean_mrr"],
+        "mean_latency_ms": result_ivf_batch_no_np_gather["mean_latency_ms"],
+        "p95_latency_ms": result_ivf_batch_no_np_gather["p95_latency_ms"],
+        "search_device": "cpu",
+        "embed_device": device,
+    }
+
+    ivf.use_numpy_candidate_gather = True
+    result_ivf_batch = evaluate_retriever(
+        retriever,
+        queries,
+        chunk_lookup=chunk_lookup,
+        use_batch_embedding=True,
+    )
+    results[f"IVF({n_clusters},8) + NumPy (norm cache, np gather, batch embed)"] = {
+        "recall@10": result_ivf_batch["mean_recall@k"],
+        "mrr": result_ivf_batch["mean_mrr"],
+        "mean_latency_ms": result_ivf_batch["mean_latency_ms"],
+        "p95_latency_ms": result_ivf_batch["p95_latency_ms"],
+        "search_device": "cpu",
+        "embed_device": device,
+    }
+    print(
+        f"    Batch embed latency: "
+        f"{result_ivf_cached_py['mean_latency_ms']:.1f}ms -> "
+        f"{result_ivf_batch['mean_latency_ms']:.1f}ms "
+        f"({result_ivf_cached_py['mean_latency_ms']/result_ivf_batch['mean_latency_ms']:.2f}x)"
+    )
+
+    # ── IVF + Numba parallel [CPU search] ──
+    try:
+        from optimized.similarity_numba import cosine_sim_numba_parallel, warmup_numba
+        warmup_numba()
+
+        ivf.use_numpy_candidate_gather = True
+        ivf.use_precomputed_norms = False
+        retriever_numba_ivf = Retriever(
+            index=ivf,
+            embedder=embedder,
+            sim_fn=cosine_sim_numba_parallel,
+        )
+
+        result_ivf_numba = evaluate_retriever(
+            retriever_numba_ivf,
+            queries,
+            chunk_lookup=chunk_lookup,
+        )
+        results[f"IVF({n_clusters},8) + Numba parallel (np gather, no norm cache)"] = {
+            "recall@10": result_ivf_numba["mean_recall@k"],
+            "mrr": result_ivf_numba["mean_mrr"],
+            "mean_latency_ms": result_ivf_numba["mean_latency_ms"],
+            "p95_latency_ms": result_ivf_numba["p95_latency_ms"],
+            "search_device": "cpu",
+            "embed_device": device,
+        }
+
+        ivf.use_precomputed_norms = True
+        retriever_numba_ivf_cached = Retriever(
+            index=ivf,
+            embedder=embedder,
+            sim_fn=cosine_sim_numba_parallel_precomputed,
+        )
+        result_ivf_numba_cached = evaluate_retriever(
+            retriever_numba_ivf_cached,
+            queries,
+            chunk_lookup=chunk_lookup,
+        )
+        results[f"IVF({n_clusters},8) + Numba parallel (np gather, norm cache)"] = {
+            "recall@10": result_ivf_numba_cached["mean_recall@k"],
+            "mrr": result_ivf_numba_cached["mean_mrr"],
+            "mean_latency_ms": result_ivf_numba_cached["mean_latency_ms"],
+            "p95_latency_ms": result_ivf_numba_cached["p95_latency_ms"],
+            "search_device": "cpu",
+            "embed_device": device,
+        }
+
+        result_ivf_numba_batch = evaluate_retriever(
+            retriever_numba_ivf_cached,
+            queries,
+            chunk_lookup=chunk_lookup,
+            use_batch_embedding=True,
+        )
+        results[f"IVF({n_clusters},8) + Numba parallel (np gather, norm cache, batch embed)"] = {
+            "recall@10": result_ivf_numba_batch["mean_recall@k"],
+            "mrr": result_ivf_numba_batch["mean_mrr"],
+            "mean_latency_ms": result_ivf_numba_batch["mean_latency_ms"],
+            "p95_latency_ms": result_ivf_numba_batch["p95_latency_ms"],
+            "search_device": "cpu",
+            "embed_device": device,
+        }
+        print(
+            f"    Numba norm-cache latency: {result_ivf_numba['mean_latency_ms']:.1f}ms -> "
+            f"{result_ivf_numba_cached['mean_latency_ms']:.1f}ms "
+            f"({result_ivf_numba['mean_latency_ms']/result_ivf_numba_cached['mean_latency_ms']:.2f}x)"
+        )
+        print(
+            f"    Numba+batch latency: {result_ivf_numba_cached['mean_latency_ms']:.1f}ms -> "
+            f"{result_ivf_numba_batch['mean_latency_ms']:.1f}ms "
+            f"({result_ivf_numba_cached['mean_latency_ms']/result_ivf_numba_batch['mean_latency_ms']:.2f}x)"
+        )
+    except ImportError:
+        pass
 
     # ── Summary ──
-    print(f"\n  {'Config':<35s} {'Recall':>8s} {'MRR':>8s} {'Latency':>10s} {'Search':>8s}")
-    print(f"  {'-'*72}")
+    config_width = max(len("Config"), *(len(name) for name in results))
+    header = (
+        f"  {'Config':<{config_width}s} {'Recall':>8s} {'MRR':>8s} "
+        f"{'Latency':>10s} {'Search':>8s}"
+    )
+    print(f"\n{header}")
+    print(f"  {'-' * (len(header) - 2)}")
     for name, r in results.items():
-        print(f"  {name:<35s} {r['recall@10']:>8.4f} {r['mrr']:>8.4f} "
-              f"{r['mean_latency_ms']:>9.1f}ms {r['search_device']:>8s}")
+        print(
+            f"  {name:<{config_width}s} {r['recall@10']:>8.4f} {r['mrr']:>8.4f} "
+            f"{r['mean_latency_ms']:>9.1f}ms {r['search_device']:>8s}"
+        )
 
     return results
 
