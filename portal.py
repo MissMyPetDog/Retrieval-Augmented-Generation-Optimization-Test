@@ -37,6 +37,17 @@ def setup_cpu_only(verbose: bool = True) -> None:
     """Hide CUDA from torch / numba / cupy so every timing reflects CPU only."""
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     os.environ["NUMBA_DISABLE_CUDA"] = "1"
+    # Windows MAX_PATH workaround: the default Numba cache lives next to the
+    # .py file in __pycache__/, and long project paths + long function names
+    # (e.g. cosine_sim_numba_parallel_precomputed) can exceed the 260-char limit.
+    # Redirect to the OS temp dir which is much shorter.
+    if sys.platform == "win32":
+        import tempfile
+        short_cache = Path(tempfile.gettempdir()) / "numba_cache"
+        short_cache.mkdir(parents=True, exist_ok=True)
+        os.environ["NUMBA_CACHE_DIR"] = str(short_cache)
+        if verbose:
+            print(f"Numba cache redirected to: {short_cache}")
     if verbose:
         try:
             import torch
@@ -920,6 +931,168 @@ def plot_streaming_generation(results: dict) -> None:
 
 
 # =====================================================================
+# Step 6 -- Friend's query-path optimizations (integration branch)
+# =====================================================================
+
+def warmup_friend_numba() -> None:
+    """JIT-compile friend's precomputed-norms Numba kernel."""
+    from optimized.similarity_numba import cosine_sim_numba_parallel_precomputed
+    dummy_q = np.random.randn(384).astype(np.float32)
+    dummy_c = np.random.randn(10, 384).astype(np.float32)
+    dummy_norms = np.linalg.norm(dummy_c, axis=1)
+    cosine_sim_numba_parallel_precomputed(dummy_q, dummy_c, dummy_norms)
+    print("  Friend's Numba precomputed-norms kernel warmed up.")
+
+
+def run_friend_query_benchmarks(
+    ivf,
+    vectors: np.ndarray,
+    k: int = 10,
+    probes: tuple = (2, 4, 8, 16),
+    n_queries: int = 20,
+    warmup: int = 2,
+    repeats: int = 5,
+    verbose: bool = True,
+) -> dict:
+    """
+    Ablation study of friend's three query-path optimizations, progressively
+    enabled on TOP of the same IVF index instance (e.g. IVFIndexNumbaPP from
+    Step 5 -- no rebuild needed, just flag toggles).
+
+    Variants:
+      A. flags off                    -- pre-merge Step 5 behavior
+      B. + norm cache                 -- friend commit a578d95
+      C. + np candidate gather        -- friend commit 06f6ed1
+      D. + Numba parallel w/ norms    -- friend commit dcec67c
+    """
+    from components.similarity import cosine_sim_numpy
+    from optimized.similarity_numba import cosine_sim_numba_parallel_precomputed
+
+    if verbose:
+        print("Warming up friend's Numba kernel...")
+    warmup_friend_numba()
+
+    query_vecs = vectors[:n_queries].astype(np.float32)
+
+    def bench(search_fn):
+        for q in query_vecs[:warmup]:
+            _ = search_fn(q)
+        times = []
+        for _ in range(repeats):
+            t0 = time.perf_counter()
+            for q in query_vecs:
+                _ = search_fn(q)
+            times.append((time.perf_counter() - t0) * 1000 / len(query_vecs))
+        return float(np.mean(times)), float(np.std(times))
+
+    # (label, sim_fn, use_precomputed_norms, use_numpy_candidate_gather)
+    variants = [
+        ("A_flags_off",               cosine_sim_numpy,                        False, False),
+        ("B_norm_cache",              cosine_sim_numpy,                        True,  False),
+        ("C_norm_cache+np_gather",    cosine_sim_numpy,                        True,  True),
+        ("D_numba_par_precomp",       cosine_sim_numba_parallel_precomputed,   True,  True),
+    ]
+
+    results: dict = {}
+    header = f"\n{'Variant':<28s} " + " ".join(f"np={p:<4d}" for p in probes)
+    if verbose:
+        print(header)
+        print("-" * len(header))
+
+    for label, sim_fn, use_norms, use_gather in variants:
+        by_probe = {}
+        for n_probes in probes:
+            m, s = bench(
+                lambda q, p=n_probes, sfn=sim_fn, un=use_norms, ug=use_gather:
+                    ivf.search(q, k=k, n_probes=p, sim_fn=sfn,
+                               use_precomputed_norms=un,
+                               use_numpy_candidate_gather=ug)
+            )
+            by_probe[f"np={n_probes}"] = {"mean_ms": m, "std_ms": s}
+        results[label] = by_probe
+
+        if verbose:
+            row = f"{label:<28s} "
+            for p in probes:
+                ms = by_probe[f"np={p}"]["mean_ms"]
+                row += f"{ms:7.2f} "
+            print(row)
+
+    # Compute per-probe speedup relative to variant A (flags off)
+    base = results["A_flags_off"]
+    for label, by_probe in results.items():
+        for p_key, d in by_probe.items():
+            d["speedup_vs_A"] = base[p_key]["mean_ms"] / d["mean_ms"]
+
+    if verbose:
+        print(f"\nSpeedup vs 'flags off' baseline (A):")
+        for label in [v[0] for v in variants]:
+            row = f"{label:<28s} "
+            for p in probes:
+                s = results[label][f"np={p}"]["speedup_vs_A"]
+                row += f"{s:6.2f}x "
+            print(row)
+
+    results["_meta"] = {
+        "n_queries_tested": n_queries,
+        "probes":           list(probes),
+        "k":                k,
+        "index_class":      type(ivf).__name__,
+    }
+    return results
+
+
+def plot_friend_benchmarks(results: dict) -> None:
+    """Grouped bar chart: one group per n_probes, 4 bars per group (variants)."""
+    meta = results.get("_meta", {})
+    probes = meta.get("probes", [2, 4, 8, 16])
+
+    variant_order = [
+        "A_flags_off",
+        "B_norm_cache",
+        "C_norm_cache+np_gather",
+        "D_numba_par_precomp",
+    ]
+    colors = ["#e74c3c", "#f39c12", "#3498db", "#27ae60"]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5))
+
+    # --- Panel 1: absolute latency ---
+    x = np.arange(len(probes))
+    width = 0.2
+    for i, label in enumerate(variant_order):
+        if label not in results:
+            continue
+        values = [results[label][f"np={p}"]["mean_ms"] for p in probes]
+        ax1.bar(x + i * width, values, width, label=label, color=colors[i], edgecolor="black")
+    ax1.set_xlabel("n_probes")
+    ax1.set_ylabel("Latency (ms/query)")
+    ax1.set_title("Friend's query-path optimizations: per-probe latency")
+    ax1.set_xticks(x + 1.5 * width)
+    ax1.set_xticklabels([str(p) for p in probes])
+    ax1.legend(loc="upper left", fontsize=9)
+    ax1.grid(True, alpha=0.3, axis="y")
+
+    # --- Panel 2: speedup vs A ---
+    for i, label in enumerate(variant_order):
+        if label not in results:
+            continue
+        values = [results[label][f"np={p}"]["speedup_vs_A"] for p in probes]
+        ax2.bar(x + i * width, values, width, label=label, color=colors[i], edgecolor="black")
+    ax2.axhline(y=1.0, linestyle="--", color="black", linewidth=1)
+    ax2.set_xlabel("n_probes")
+    ax2.set_ylabel("Speedup vs variant A (x)")
+    ax2.set_title("Cumulative speedup by enabling each flag")
+    ax2.set_xticks(x + 1.5 * width)
+    ax2.set_xticklabels([str(p) for p in probes])
+    ax2.legend(loc="upper left", fontsize=9)
+    ax2.grid(True, alpha=0.3, axis="y")
+
+    plt.tight_layout()
+    plt.show()
+
+
+# =====================================================================
 # Step 5 -- Pipeline parallelism (Week 10/11)
 # =====================================================================
 
@@ -1559,6 +1732,15 @@ def _extract_key_metrics(R: dict) -> dict:
             m["pipe_opt_total_ms"] = v["total_ms"]
             m["pipe_opt_per_q_ms"] = v["mean_ms_per_query"]
             m["pipe_speedup"]      = v["speedup_vs_sequential"]
+
+    # Step 6: friend's query-path optimizations (ablation at n_probes=2, the fastest config)
+    fo = R.get("friend_opts", {}) or {}
+    fastest_probe = "np=2"
+    for variant in ("A_flags_off", "B_norm_cache",
+                    "C_norm_cache+np_gather", "D_numba_par_precomp"):
+        if variant in fo and fastest_probe in fo[variant]:
+            short = variant.split("_", 1)[0].lower()   # A/B/C/D
+            m[f"friend_{short}_np2_ms"] = fo[variant][fastest_probe]["mean_ms"]
     return m
 
 

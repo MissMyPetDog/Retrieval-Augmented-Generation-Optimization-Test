@@ -1,0 +1,101 @@
+{
+  "name": "Config 3: Fully optimized (IVF(64, np=8) + pipelined stream)",
+  "description": "All 6 optimization steps: Numba K-Means + K-Means++ + norm cache + np gather + LLM streaming + dual-pool pipelined serving.",
+  "config": {
+    "index": "IVFIndexNumbaPP(n_clusters=64)",
+    "n_probes": 8,
+    "sim_fn": "cosine_sim_numpy",
+    "kmeans_impl": "Numba + K-Means++ init",
+    "use_precomputed_norms": true,
+    "use_numpy_candidate_gather": true,
+    "generator": "BaselineGenerator.generate_stream (streaming)",
+    "architecture": "pipelined (retrieval=4 || gen=8)",
+    "n_retrieved": 5,
+    "max_tokens": 256
+  },
+  "build_time_ms": 1971.5206999971997,
+  "per_query": [
+    {
+      "query": "what is rba",
+      "embed_ms": 35.67829999883543,
+      "search_ms": 11.955400001170347,
+      "recall@k": 1.0,
+      "gen_ms": 2886.7697000023327,
+      "ttft_ms": 2750.9854000018095,
+      "total_ms": 2934.4034000023385
+    },
+    {
+      "query": "was ronald reagan a democrat",
+      "embed_ms": 35.598700000264216,
+      "search_ms": 12.778800002706703,
+      "recall@k": 1.0,
+      "gen_ms": 837.4044000011054,
+      "ttft_ms": 803.5751999996137,
+      "total_ms": 885.7819000040763
+    },
+    {
+      "query": "how long do you need for sydney and surrounding areas",
+      "embed_ms": 36.19749999779742,
+      "search_ms": 14.422899999772198,
+      "recall@k": 1.0,
+      "gen_ms": 975.6606999981159,
+      "ttft_ms": 937.1761000002152,
+      "total_ms": 1026.2810999956855
+    },
+    {
+      "query": "price to install tile in shower",
+      "embed_ms": 35.066399999777786,
+      "search_ms": 17.415800000890158,
+      "recall@k": 1.0,
+      "gen_ms": 1515.5119000010018,
+      "ttft_ms": 1462.8316999987874,
+      "total_ms": 1567.9941000016697
+    },
+    {
+      "query": "why conversion observed in body",
+      "embed_ms": 42.81810000247788,
+      "search_ms": 12.906599997222656,
+      "recall@k": 0.0,
+      "gen_ms": 1172.169199999189,
+      "ttft_ms": 1141.9442000005802,
+      "total_ms": 1227.8938999988895
+    },
+    {
+      "query": "where are the lungs located in the back",
+      "embed_ms": 39.87119999874267,
+      "search_ms": 15.599800000927644,
+      "recall@k": 0.0,
+      "gen_ms": 3039.1735000011977,
+      "ttft_ms": 2988.229400001728,
+      "total_ms": 3094.644500000868
+    },
+    {
+      "query": "cost to get a patent",
+      "embed_ms": 36.75709999879473,
+      "search_ms": 18.642700000782497,
+      "recall@k": 1.0,
+      "gen_ms": 1361.5202999972098,
+      "ttft_ms": 1289.9623999983305,
+      "total_ms": 1416.920099996787
+    },
+    {
+      "query": "best tragedies of ancient greece",
+      "embed_ms": 35.555200000089826,
+      "search_ms": 12.049900000420166,
+      "recall@k": 0.0,
+      "gen_ms": 999.4471000027261,
+      "ttft_ms": 956.1476000017137,
+      "total_ms": 1047.052200003236
+    }
+  ],
+  "per_query_mean": {
+    "embed_ms": 37.192812499597494,
+    "search_ms": 14.471487500486546,
+    "gen_ms": 1598.4571000003598,
+    "ttft_ms": 1541.3565000003473,
+    "total_ms": 1650.1214000004438,
+    "recall@k": 0.625
+  },
+  "batch_total_ms": 3770.300000000134,
+  "n_queries": 8
+}
