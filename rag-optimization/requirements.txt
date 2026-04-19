@@ -22,3 +22,11 @@ scipy>=1.11
 
 # ── Visualization ──
 matplotlib>=3.7
+
+# ── LLM API ──
+openai>=1.0
+
+# ── Notebook ──
+ipython>=8.0
+notebook>=7.0
+ipykernel>=6.0

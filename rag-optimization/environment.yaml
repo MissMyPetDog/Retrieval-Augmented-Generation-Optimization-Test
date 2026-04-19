@@ -12,6 +12,10 @@ dependencies:
   - datasets>=2.14
   - tqdm>=4.65
   - matplotlib>=3.7
+  - openai>=1.0
+  - ipython>=8.0
+  - notebook>=7.0
+  - ipykernel>=6.0
   - pip:
       # Optional: install one that matches your CUDA runtime
       # - cupy-cuda12x>=12.0
