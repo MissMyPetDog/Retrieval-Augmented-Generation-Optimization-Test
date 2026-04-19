@@ -9,3 +9,6 @@ rag-optimization/data/large/
 rag-optimization/data/passages.jsonl
 rag-optimization/data/queries.jsonl
 rag-optimization/timings_baseline.json
+
+results
+benchmark_results.json

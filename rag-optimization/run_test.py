@@ -30,6 +30,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 def force_cpu():
     """Force all PyTorch operations to CPU by hiding CUDA."""
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    # Windows MAX_PATH workaround: the default Numba cache lives next to the
+    # .py file in __pycache__/, and long project paths + long function names
+    # (e.g. cosine_sim_numba_parallel_precomputed) can exceed the 260-char limit.
+    # Redirect to the OS temp dir which is much shorter.
+    if sys.platform == "win32":
+        import tempfile
+        short_cache = os.path.join(tempfile.gettempdir(), "numba_cache")
+        os.makedirs(short_cache, exist_ok=True)
+        os.environ["NUMBA_CACHE_DIR"] = short_cache
     import torch
     assert not torch.cuda.is_available(), "Failed to disable CUDA"
 
@@ -145,6 +154,76 @@ def run_similarity_tests(vectors, device, skip_pure_python=False):
             speedup = baseline_ms / data["ms"] if data["ms"] > 0 else 0
             tag = " [GPU]" if data["device"] == "gpu" else " [CPU]"
             print(f"  {name:<30s} {data['ms']:>9.2f}ms {speedup:>9.1f}x{tag}")
+
+    return results
+
+
+def run_build_tests(vectors, doc_ids, n_clusters=64):
+    """
+    Build-time benchmarks for K-Means variants (Step 2 + Step 3 of the optimization journey).
+
+    Compares 3 index-build implementations:
+      A. baseline IVFIndex           -- pure NumPy K-Means with random init
+      B. IVFIndexNumba               -- Step 2: Numba JIT K-Means + cached v_norms
+      C. IVFIndexNumbaPP             -- Step 3: Numba JIT + K-Means++ seeding
+
+    No API calls, no external I/O -- pure CPU compute comparison.
+    """
+    from components.vector_index import IVFIndex
+    try:
+        from optimized.kmeans_numba import (
+            IVFIndexNumba, IVFIndexNumbaPP, warmup_kmeans_numba,
+        )
+        NUMBA_AVAILABLE = True
+    except ImportError as e:
+        print(f"  kmeans_numba not available ({e}), skipping Numba K-Means tests")
+        NUMBA_AVAILABLE = False
+
+    print(f"\n{'='*65}")
+    print(f"BUILD BENCHMARK ({len(vectors):,} vectors, {n_clusters} clusters)")
+    print(f"  K-Means variants: NumPy baseline vs Numba vs Numba+K-Means++")
+    print(f"{'='*65}")
+
+    results = {"n_vectors": int(len(vectors)), "n_clusters": n_clusters}
+    full = vectors.astype(np.float32)
+
+    # --- A. baseline NumPy K-Means (random init) ---
+    ivf_baseline = IVFIndex(n_clusters=n_clusters, n_probes=8, kmeans_iters=20)
+    t0 = time.perf_counter()
+    ivf_baseline.build(full, doc_ids)
+    t_baseline = (time.perf_counter() - t0) * 1000
+    print(f"  A. NumPy K-Means (random init) [CPU]:       {t_baseline:8.1f} ms")
+    results["baseline_numpy"] = {"build_ms": t_baseline}
+
+    if NUMBA_AVAILABLE:
+        warmup_kmeans_numba()   # JIT compile before timing
+
+        # --- B. Numba K-Means (Step 2) ---
+        ivf_numba = IVFIndexNumba(n_clusters=n_clusters, n_probes=8, kmeans_iters=20)
+        t0 = time.perf_counter()
+        ivf_numba.build(full, doc_ids)
+        t_numba = (time.perf_counter() - t0) * 1000
+        speedup_b = t_baseline / t_numba
+        print(f"  B. Numba K-Means (random init) [CPU]:       "
+              f"{t_numba:8.1f} ms  ({speedup_b:.2f}x vs baseline)")
+        results["numba"] = {"build_ms": t_numba, "speedup_vs_baseline": speedup_b}
+
+        # --- C. Numba K-Means + K-Means++ (Step 3) ---
+        ivf_pp = IVFIndexNumbaPP(n_clusters=n_clusters, n_probes=8, kmeans_iters=20)
+        t0 = time.perf_counter()
+        ivf_pp.build(full, doc_ids)
+        t_pp = (time.perf_counter() - t0) * 1000
+        speedup_c = t_baseline / t_pp
+        print(f"  C. Numba K-Means (K-Means++ init) [CPU]:    "
+              f"{t_pp:8.1f} ms  ({speedup_c:.2f}x vs baseline)")
+        results["numba_pp"] = {"build_ms": t_pp, "speedup_vs_baseline": speedup_c}
+
+        print(f"\n  --- Build time comparison ---")
+        print(f"  {'Implementation':<35s} {'Build (ms)':>12s} {'Speedup':>10s}")
+        print(f"  {'-'*60}")
+        print(f"  {'A. NumPy baseline':<35s} {t_baseline:>11.1f}  {'1.00x':>10s}")
+        print(f"  {'B. Numba (random init)':<35s} {t_numba:>11.1f}  {speedup_b:>9.2f}x")
+        print(f"  {'C. Numba (K-Means++ init)':<35s} {t_pp:>11.1f}  {speedup_c:>9.2f}x")
 
     return results
 
@@ -450,7 +529,107 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
     return results
 
 
-def run_all(data_dir, device, skip_pure_python=False, similarity_only=False):
+def run_llm_tests(vectors, doc_ids, chunk_lookup, queries,
+                  n_queries=8, k=3, max_tokens=128):
+    """
+    Real-API LLM benchmarks (Step 4 + Step 5 + Section 7 of the optimization journey).
+
+    Hits NYU's Kong gpt-4o endpoint. Requires KONG_API_KEY env var.
+    Cost: ~8 calls x 4-5 modes ~= 35 real API calls, ~$0.15 per run.
+
+    Three sections:
+      1. Concurrent generation (sequential vs threaded vs async)  -- Section 7
+      2. LLM streaming          (non-stream vs stream, TTFT metric) -- Step 4
+      3. Pipelined RAG          (naive serial vs dual-pool)         -- Step 5
+    """
+    if "KONG_API_KEY" not in os.environ:
+        print("\n!!! KONG_API_KEY not set in environment -- skipping LLM tests. !!!")
+        print("   Set it with: export KONG_API_KEY=your-key   (or setx on Windows)")
+        return {"skipped": True, "reason": "no_api_key"}
+
+    print(f"\n{'='*65}")
+    print(f"LLM BENCHMARK (real Kong gpt-4o, ~{n_queries * 4} API calls)")
+    print(f"{'='*65}")
+
+    # Import portal from project root for shared LLM benchmark logic
+    proj_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    if proj_root not in sys.path:
+        sys.path.insert(0, proj_root)
+    import portal
+
+    # --- prepare (query, contexts) items using a quick BF retrieval ---
+    from components.embedder import LocalEmbedder
+    from components.vector_index import BruteForceIndex
+    from components.similarity import cosine_sim_numpy
+
+    print(f"\n  Preparing {n_queries} (query, top-{k} contexts) pairs...")
+    bf = BruteForceIndex()
+    bf.build(vectors.astype(np.float32), doc_ids)
+
+    chunks = [{"id": did, "text": chunk_lookup.get(did, "")} for did in doc_ids]
+    selected = [q for q in queries if q.get("relevant_passages")][:n_queries]
+
+    embedder = LocalEmbedder(device="cpu")
+    _ = embedder.embed_query("warmup")
+    q_vecs = embedder.embed_texts([q["text"] for q in selected], show_progress=False)
+    items = []
+    for q, qv in zip(selected, q_vecs):
+        results = bf.search(qv, k=k, sim_fn=cosine_sim_numpy)
+        contexts = [chunk_lookup.get(did, "") for did, _ in results]
+        items.append((q["text"], contexts))
+    print(f"  Sample query: {items[0][0][:60]!r}")
+
+    results_out = {}
+
+    # --- Section 1: concurrent generation (non-streaming) -- Section 7 ---
+    print(f"\n  === Section 1: Concurrent generation (non-stream) ===")
+    r_gen = portal.run_async_generation_benchmarks(
+        items, n_threads=8, max_async=8,
+        model="gpt-4o", max_tokens=max_tokens, verbose=True,
+    )
+    results_out["concurrent_generation"] = r_gen
+
+    # --- Section 2: streaming (Step 4) ---
+    print(f"\n  === Section 2: LLM streaming (TTFT metric) -- Step 4 ===")
+    r_stream = portal.run_streaming_generation_benchmarks(
+        items, model="gpt-4o", max_tokens=max_tokens,
+        concurrent_workers=8, verbose=True,
+    )
+    results_out["streaming"] = r_stream
+
+    # --- Section 3: pipelined RAG (Step 5) -- uses real queries, not precomputed items ---
+    print(f"\n  === Section 3: Pipelined RAG (dual-pool) -- Step 5 ===")
+    r_pipe = portal.run_pipeline_benchmarks(
+        selected, chunks, bf,
+        n_items=n_queries, k=k,
+        n_embed_workers=4, n_gen_workers=8,
+        model="gpt-4o", max_tokens=max_tokens, verbose=True,
+    )
+    results_out["pipeline"] = r_pipe
+
+    # --- Summary ---
+    print(f"\n  --- LLM benchmark summary ---")
+    if "Sequential" in r_gen:
+        seq_ms = r_gen["Sequential"]["total_ms"]
+        print(f"  Sequential non-stream (baseline)      : {seq_ms/1000:6.2f} s")
+    for name, d in r_gen.items():
+        if name.startswith(("Threaded", "Async")):
+            print(f"  Concurrent non-stream ({name:<18s}): {d['total_ms']/1000:6.2f} s "
+                  f"({d['speedup_vs_sequential']:.2f}x)")
+    if "Sequential (non-stream)" in r_stream:
+        print(f"  Streaming (sequential) TTFT           : "
+              f"{r_stream['Sequential (streaming)']['mean_ttft_ms']:6.0f} ms "
+              f"(vs non-stream {r_stream['Sequential (non-stream)']['mean_ttft_ms']:.0f} ms)")
+    for name, d in r_pipe.items():
+        if name.startswith("Pipelined"):
+            print(f"  Pipelined RAG end-to-end              : "
+                  f"{d['total_ms']/1000:6.2f} s ({d['speedup_vs_sequential']:.2f}x vs naive)")
+
+    return results_out
+
+
+def run_all(data_dir, device, skip_pure_python=False, similarity_only=False,
+            with_build=False, with_llm=False, build_only=False, llm_only=False):
     """Run all tests for a given device setting."""
     # Load data
     vectors = np.load(os.path.join(data_dir, "vectors.npy"))
@@ -469,16 +648,34 @@ def run_all(data_dir, device, skip_pure_python=False, similarity_only=False):
 
     all_results = {"device": device}
 
+    # If user explicitly asks for a single phase, short-circuit and skip the rest.
+    if build_only:
+        all_results["build"] = run_build_tests(vectors, doc_ids)
+        return all_results
+    if llm_only:
+        all_results["llm"] = run_llm_tests(vectors, doc_ids, chunk_lookup, queries)
+        return all_results
+
     # Similarity
     all_results["similarity"] = run_similarity_tests(
         vectors, device, skip_pure_python=skip_pure_python
     )
 
-    # Retrieval
-    if not similarity_only:
-        all_results["retrieval"] = run_retrieval_tests(
-            vectors, doc_ids, chunk_lookup, queries, device
-        )
+    if similarity_only:
+        return all_results
+
+    # Retrieval (friend's IVF ablation)
+    all_results["retrieval"] = run_retrieval_tests(
+        vectors, doc_ids, chunk_lookup, queries, device
+    )
+
+    # Build (user's Step 2-3: Numba K-Means / K-Means++)
+    if with_build:
+        all_results["build"] = run_build_tests(vectors, doc_ids)
+
+    # LLM (user's Step 4/5 + Section 7; REAL API, costs money)
+    if with_llm:
+        all_results["llm"] = run_llm_tests(vectors, doc_ids, chunk_lookup, queries)
 
     return all_results
 
@@ -493,6 +690,17 @@ def main():
                         help="Skip the slow Pure Python baseline")
     parser.add_argument("--similarity_only", action="store_true",
                         help="Only run similarity benchmarks")
+    parser.add_argument("--with_build", action="store_true",
+                        help="Also run build-time benchmarks (NumPy vs Numba vs Numba+K-Means++). "
+                             "No API cost.")
+    parser.add_argument("--with_llm", action="store_true",
+                        help="Also run LLM benchmarks (streaming + concurrent + pipelined). "
+                             "REQUIRES KONG_API_KEY env var. ~$0.15 per run.")
+    parser.add_argument("--build_only", action="store_true",
+                        help="Only run build-time benchmarks (K-Means variants)")
+    parser.add_argument("--llm_only", action="store_true",
+                        help="Only run LLM benchmarks (streaming + concurrent + pipelined). "
+                             "REQUIRES KONG_API_KEY.")
     args = parser.parse_args()
 
     data_dir = args.data_dir
@@ -511,7 +719,15 @@ def main():
         print("PHASE 1: CPU-ONLY (measures pure code optimization)")
         print("=" * 65)
         force_cpu()
-        cpu_results = run_all(data_dir, "cpu", args.skip_pure_python, args.similarity_only)
+        cpu_results = run_all(
+            data_dir, "cpu",
+            skip_pure_python=args.skip_pure_python,
+            similarity_only=args.similarity_only,
+            with_build=args.with_build,
+            with_llm=args.with_llm,
+            build_only=args.build_only,
+            llm_only=args.llm_only,
+        )
 
         # Save CPU results
         cpu_path = os.path.join(data_dir, "test_results_cpu.json")
@@ -527,14 +743,30 @@ def main():
 
     elif args.device == "cpu":
         force_cpu()
-        results = run_all(data_dir, "cpu", args.skip_pure_python, args.similarity_only)
+        results = run_all(
+            data_dir, "cpu",
+            skip_pure_python=args.skip_pure_python,
+            similarity_only=args.similarity_only,
+            with_build=args.with_build,
+            with_llm=args.with_llm,
+            build_only=args.build_only,
+            llm_only=args.llm_only,
+        )
         output_path = os.path.join(data_dir, "test_results_cpu.json")
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, default=float)
         print(f"\nResults saved → {output_path}")
 
     else:  # cuda
-        results = run_all(data_dir, "cuda", args.skip_pure_python, args.similarity_only)
+        results = run_all(
+            data_dir, "cuda",
+            skip_pure_python=args.skip_pure_python,
+            similarity_only=args.similarity_only,
+            with_build=args.with_build,
+            with_llm=args.with_llm,
+            build_only=args.build_only,
+            llm_only=args.llm_only,
+        )
         output_path = os.path.join(data_dir, "test_results_cuda.json")
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, default=float)
