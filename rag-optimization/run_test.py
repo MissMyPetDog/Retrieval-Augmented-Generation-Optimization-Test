@@ -274,7 +274,7 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
 
     bf.use_precomputed_norms = False
     result_bf_legacy = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
-    results["BruteForce + NumPy (no norm cache)"] = {
+    results["BruteForce + NumPy -> Baseline"] = {
         "recall@10": result_bf_legacy["mean_recall@k"],
         "mrr": result_bf_legacy["mean_mrr"],
         "mean_latency_ms": result_bf_legacy["mean_latency_ms"],
@@ -358,10 +358,12 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
     ivf.build(vectors, doc_ids)
     retriever = Retriever(index=ivf, embedder=embedder, sim_fn=cosine_sim_numpy)
 
+    # np gather is always on now -- treated as part of the baseline.
+    ivf.use_numpy_candidate_gather = True
+
     ivf.use_precomputed_norms = False
-    ivf.use_numpy_candidate_gather = False
     result_ivf_baseline = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
-    results[f"IVF({n_clusters},8) + NumPy (baseline)"] = {
+    results[f"IVF({n_clusters},8) + NumPy"] = {
         "recall@10": result_ivf_baseline["mean_recall@k"],
         "mrr": result_ivf_baseline["mean_mrr"],
         "mean_latency_ms": result_ivf_baseline["mean_latency_ms"],
@@ -371,59 +373,30 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
     }
 
     ivf.use_precomputed_norms = True
-    ivf.use_numpy_candidate_gather = False
-    result_ivf_cached_py = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
+    result_ivf_norm_cache = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
     results[f"IVF({n_clusters},8) + NumPy (norm cache)"] = {
-        "recall@10": result_ivf_cached_py["mean_recall@k"],
-        "mrr": result_ivf_cached_py["mean_mrr"],
-        "mean_latency_ms": result_ivf_cached_py["mean_latency_ms"],
-        "p95_latency_ms": result_ivf_cached_py["p95_latency_ms"],
+        "recall@10": result_ivf_norm_cache["mean_recall@k"],
+        "mrr": result_ivf_norm_cache["mean_mrr"],
+        "mean_latency_ms": result_ivf_norm_cache["mean_latency_ms"],
+        "p95_latency_ms": result_ivf_norm_cache["p95_latency_ms"],
         "search_device": "cpu",
         "embed_device": device,
     }
-
-    ivf.use_numpy_candidate_gather = True
-    result_ivf_cached_np = evaluate_retriever(retriever, queries, chunk_lookup=chunk_lookup)
-    results[f"IVF({n_clusters},8) + NumPy (norm cache, np gather)"] = {
-        "recall@10": result_ivf_cached_np["mean_recall@k"],
-        "mrr": result_ivf_cached_np["mean_mrr"],
-        "mean_latency_ms": result_ivf_cached_np["mean_latency_ms"],
-        "p95_latency_ms": result_ivf_cached_np["p95_latency_ms"],
-        "search_device": "cpu",
-        "embed_device": device,
-    }
-    print(f"    Recall@10: {result_ivf_cached_np['mean_recall@k']:.4f}")
+    print(f"    Recall@10: {result_ivf_norm_cache['mean_recall@k']:.4f}")
     print(
-        f"    Gather latency: {result_ivf_cached_py['mean_latency_ms']:.1f}ms -> "
-        f"{result_ivf_cached_np['mean_latency_ms']:.1f}ms "
-        f"({result_ivf_cached_py['mean_latency_ms']/result_ivf_cached_np['mean_latency_ms']:.2f}x)"
+        f"    Norm-cache latency: {result_ivf_baseline['mean_latency_ms']:.1f}ms -> "
+        f"{result_ivf_norm_cache['mean_latency_ms']:.1f}ms "
+        f"({result_ivf_baseline['mean_latency_ms']/result_ivf_norm_cache['mean_latency_ms']:.2f}x)"
     )
 
     # ── IVF + NumPy + batch query embedding (throughput optimization) ──
-    ivf.use_numpy_candidate_gather = False
-    result_ivf_batch_no_np_gather = evaluate_retriever(
-        retriever,
-        queries,
-        chunk_lookup=chunk_lookup,
-        use_batch_embedding=True,
-    )
-    results[f"IVF({n_clusters},8) + NumPy (norm cache, batch embed)"] = {
-        "recall@10": result_ivf_batch_no_np_gather["mean_recall@k"],
-        "mrr": result_ivf_batch_no_np_gather["mean_mrr"],
-        "mean_latency_ms": result_ivf_batch_no_np_gather["mean_latency_ms"],
-        "p95_latency_ms": result_ivf_batch_no_np_gather["p95_latency_ms"],
-        "search_device": "cpu",
-        "embed_device": device,
-    }
-
-    ivf.use_numpy_candidate_gather = True
     result_ivf_batch = evaluate_retriever(
         retriever,
         queries,
         chunk_lookup=chunk_lookup,
         use_batch_embedding=True,
     )
-    results[f"IVF({n_clusters},8) + NumPy (norm cache, np gather, batch embed)"] = {
+    results[f"IVF({n_clusters},8) + NumPy (norm cache, batch embed)"] = {
         "recall@10": result_ivf_batch["mean_recall@k"],
         "mrr": result_ivf_batch["mean_mrr"],
         "mean_latency_ms": result_ivf_batch["mean_latency_ms"],
@@ -433,9 +406,9 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
     }
     print(
         f"    Batch embed latency: "
-        f"{result_ivf_cached_py['mean_latency_ms']:.1f}ms -> "
+        f"{result_ivf_norm_cache['mean_latency_ms']:.1f}ms -> "
         f"{result_ivf_batch['mean_latency_ms']:.1f}ms "
-        f"({result_ivf_cached_py['mean_latency_ms']/result_ivf_batch['mean_latency_ms']:.2f}x)"
+        f"({result_ivf_norm_cache['mean_latency_ms']/result_ivf_batch['mean_latency_ms']:.2f}x)"
     )
 
     # ── IVF + Numba parallel [CPU search] ──
@@ -456,7 +429,7 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
             queries,
             chunk_lookup=chunk_lookup,
         )
-        results[f"IVF({n_clusters},8) + Numba parallel (np gather, no norm cache)"] = {
+        results[f"IVF({n_clusters},8) + Numba parallel"] = {
             "recall@10": result_ivf_numba["mean_recall@k"],
             "mrr": result_ivf_numba["mean_mrr"],
             "mean_latency_ms": result_ivf_numba["mean_latency_ms"],
@@ -476,7 +449,7 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
             queries,
             chunk_lookup=chunk_lookup,
         )
-        results[f"IVF({n_clusters},8) + Numba parallel (np gather, norm cache)"] = {
+        results[f"IVF({n_clusters},8) + Numba parallel (norm cache)"] = {
             "recall@10": result_ivf_numba_cached["mean_recall@k"],
             "mrr": result_ivf_numba_cached["mean_mrr"],
             "mean_latency_ms": result_ivf_numba_cached["mean_latency_ms"],
@@ -491,7 +464,7 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
             chunk_lookup=chunk_lookup,
             use_batch_embedding=True,
         )
-        results[f"IVF({n_clusters},8) + Numba parallel (np gather, norm cache, batch embed)"] = {
+        results[f"IVF({n_clusters},8) + Numba parallel (norm cache, batch embed)"] = {
             "recall@10": result_ivf_numba_batch["mean_recall@k"],
             "mrr": result_ivf_numba_batch["mean_mrr"],
             "mean_latency_ms": result_ivf_numba_batch["mean_latency_ms"],

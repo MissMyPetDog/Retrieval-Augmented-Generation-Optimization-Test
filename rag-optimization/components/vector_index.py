@@ -142,7 +142,7 @@ class IVFIndex:
         self.vectors: Optional[np.ndarray] = None
         self.vector_norms: Optional[np.ndarray] = None  # (N,)
         self.use_precomputed_norms: bool = True
-        self.use_numpy_candidate_gather: bool = False
+        self.use_numpy_candidate_gather: bool = True
         self.doc_ids: list[str] = []
         self.build_time: float = 0.0
 

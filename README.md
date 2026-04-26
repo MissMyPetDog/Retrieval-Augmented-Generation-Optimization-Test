@@ -36,13 +36,13 @@ jupyter lab compare_pipelines.ipynb     # 3-way final comparison (BruteForce vs 
 
 ### CLI flags
 
-| Flag | Effect |
-|------|--------|
-| `--similarity_only` | only similarity kernels |
-| `--build_only` | only K-Means variants |
-| `--llm_only` | only LLM tests (requires `ChatGPT_API_KEY`) |
-| `--with_build` | adds K-Means build comparison to default run |
-| `--with_llm` | adds LLM tests to default run |
+| **Flag**            | **Effect**                                   |
+| :------------------ | :------------------------------------------- |
+| `--similarity_only` | only similarity kernels                      |
+| `--build_only`      | only K-Means variants                        |
+| `--llm_only`        | only LLM tests (requires `ChatGPT_API_KEY`)  |
+| `--with_build`      | adds K-Means build comparison to default run |
+| `--with_llm`        | adds LLM tests to default run                |
 
 ---
 
@@ -62,57 +62,46 @@ Each stage has a different bottleneck type — CPU math for search, IO wait for 
 
 ## Results
 
-### Similarity (per-query cosine over 100K × 384 corpus)
-
-| Kernel | Latency | vs NumPy |
-|---|---:|---:|
-| Pure Python | 13,558 ms | 0.004× |
-| NumPy (BLAS) | 51.9 ms | 1.00× |
-| Numba (single-threaded) | 38.0 ms | 1.37× |
-| **Numba (parallel)** | **6.14 ms** | **8.46×** |
-
 ### Retrieval (500 queries, Recall@10 + mean latency)
 
-| Configuration | Recall@10 | MRR | Latency | Search speedup |
-|---|:---:|:---:|---:|:---:|
-| BruteForce + NumPy (no norm cache) | **0.8908** | 0.4937 | 68.1 ms | 1.00× |
-| BruteForce + NumPy (norm cache) | 0.8908 | 0.4937 | 12.5 ms | 5.43× |
-| BruteForce + Numba parallel | 0.8908 | 0.4937 | 19.1 ms | 3.56× |
-| IVF(64, 8) + NumPy (baseline) | 0.8508 | 0.4740 | 21.6 ms | 3.15× |
-| IVF(64, 8) + NumPy (norm cache) | 0.8508 | 0.4740 | 14.5 ms | 4.69× |
-| IVF(64, 8) + NumPy (norm cache, np gather) | 0.8508 | 0.4740 | 13.9 ms | 4.90× |
-| IVF(64, 8) + NumPy (norm cache, batch embed) | 0.8508 | 0.4740 | 7.84 ms | 8.69× |
-| **IVF(64, 8) + NumPy (all three)** | **0.8508** | **0.4740** | **7.27 ms** | **9.37×** |
-| IVF(64, 8) + Numba parallel (np gather, no cache) | 0.8508 | 0.4740 | 19.3 ms | 3.53× |
-| IVF(64, 8) + Numba parallel (all three) | 0.8508 | 0.4740 | 9.91 ms | 6.87× |
+| Configuration                                         | Recall@10  | MRR        | Latency     | Search speedup |
+| :---------------------------------------------------- | :--------- | :--------- | :---------- | :------------- |
+| BruteForce + NumPy -> Baseline                        | **0.8908** | 0.4937     | 68.1 ms     | 1.00×          |
+| BruteForce + NumPy (norm cache)                       | 0.8908     | 0.4937     | 12.5 ms     | 5.43×          |
+| BruteForce + Numba parallel                           | 0.8908     | 0.4937     | 19.1 ms     | 3.56×          |
+| IVF(64, 8) + NumPy                                    | 0.8508     | 0.4740     | 21.6 ms     | 3.15×          |
+| IVF(64, 8) + NumPy (norm cache)                       | 0.8508     | 0.4740     | 13.9 ms     | 4.90×          |
+| **IVF(64, 8) + NumPy (norm cache, batch embed)**      | **0.8508** | **0.4740** | **7.27 ms** | **9.37×**      |
+| IVF(64, 8) + Numba parallel                           | 0.8508     | 0.4740     | 19.3 ms     | 3.53×          |
+| IVF(64, 8) + Numba parallel (norm cache, batch embed) | 0.8508     | 0.4740     | 9.91 ms     | 6.87×          |
 
-IVF trades ~4.5% recall for 5-9× faster queries. The "norm cache + np gather + batch embed" combination is the clear winner on CPU.
+IVF trades ~4.5% recall for 5-9× faster queries. The "norm cache + batch embed" combination is the clear winner on CPU.
 
 
 ### LLM: concurrency (batch throughput, 8 real gpt-4o calls)
 
-| Mode | Batch total | Speedup |
-|---|---:|:---:|
-| Sequential | 13,099 ms | 1.00× |
-| Threaded (n=8) | 6,688 ms | 1.96× |
+| Mode              | Batch total  | Speedup   |
+| :---------------- | :----------- | :-------- |
+| Sequential        | 13,099 ms    | 1.00×     |
+| Threaded (n=8)    | 6,688 ms     | 1.96×     |
 | **Async (max=8)** | **4,920 ms** | **2.66×** |
 
 ### LLM: streaming (perceived latency, TTFT)
 
-| Mode | TTFT | Total per call | TTFT reduction |
-|---|---:|---:|:---:|
-| Sequential non-streaming | 1,435 ms | 1,435 ms | baseline |
-| **Sequential streaming** | **1,112 ms** | 1,153 ms | **−22.5%** |
-| Concurrent streaming (n=8) | 1,229 ms | 1,267 ms | −14.4% |
+| Mode                       | TTFT         | Total per call | TTFT reduction |
+| :------------------------- | :----------- | :------------- | :------------- |
+| Sequential non-streaming   | 1,435 ms     | 1,435 ms       | baseline       |
+| **Sequential streaming**   | **1,112 ms** | 1,153 ms       | **−22.5%**     |
+| Concurrent streaming (n=8) | 1,229 ms     | 1,267 ms       | −14.4%         |
 
 Streaming makes the user see the first word sooner even though total generation time is unchanged.
 
 ### LLM: pipelined RAG (end-to-end, embed + search + gen)
 
-| Mode | Batch total | Per-query amortized | Speedup |
-|---|---:|---:|:---:|
-| Sequential naive | 11,727 ms | 1,466 ms | 1.00× |
-| **Pipelined (4 retrieve + 8 gen)** | **6,724 ms** | **841 ms** | **1.74×** |
+| Mode                               | Batch total  | Per-query amortized | Speedup   |
+| :--------------------------------- | :----------- | :------------------ | :-------- |
+| Sequential naive                   | 11,727 ms    | 1,466 ms            | 1.00×     |
+| **Pipelined (4 retrieve + 8 gen)** | **6,724 ms** | **841 ms**          | **1.74×** |
 
 The pipelined architecture overlaps CPU-bound retrieval with IO-bound generation through two parallel thread pools. In lighter ChatGPT-load runs this reaches **5.1×** (see `results/experiments/medium_5_pipeline.json`); the 1.74× shown here reflects real-world proxy rate-limiting under back-to-back concurrent sections.
 
