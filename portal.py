@@ -1093,6 +1093,318 @@ def plot_friend_benchmarks(results: dict) -> None:
 
 
 # =====================================================================
+# End-to-end COMBO comparison (stacks components, real Kong gpt-4o)
+# =====================================================================
+
+def run_endtoend_combos(
+    queries: list,
+    chunks: list,
+    bf,
+    ivf,
+    data_dir,
+    n_items: int = 8,
+    k: int = 3,
+    n_probes: int = 8,
+    n_async_workers: int = 8,
+    max_tokens: int = 128,
+    llm_mode: str = "async",         # "async" | "threaded" | "sequential"
+    verbose: bool = True,
+) -> dict:
+    """
+    Stack different retrieval/similarity components together with the SAME async
+    LLM generation, then time the FULL end-to-end pipeline for N queries.
+
+    Combos compared (each is one full RAG pipeline):
+      A) BruteForce + cosine_sim_numpy (no optimizations) + Async LLM
+      B) IVF + cosine_sim_numpy + norm_cache + np_gather   + Async LLM
+      C) IVF + cosine_sim_numba_parallel_precomputed + cache + gather + Async LLM
+
+    Per combo, measures: Recall@K, retrieval latency (per-query and total),
+    generation latency (per-call and total), and end-to-end batch time.
+    """
+    from components.embedder import LocalEmbedder
+    from components.similarity import cosine_sim_numpy
+    from optimized.similarity_numba import (
+        cosine_sim_numba_parallel_precomputed,
+    )
+    from optimized.async_generator import AsyncGenerator, ThreadedGenerator
+
+    if llm_mode not in ("async", "threaded", "sequential"):
+        raise ValueError(f"llm_mode must be 'async' | 'threaded' | 'sequential'; got {llm_mode!r}")
+
+    chunk_to_passage = _load_chunk_to_passage_text(data_dir, chunks)
+    chunk_by_id = {c["id"]: c["text"] for c in chunks}
+
+    good = [q for q in queries if q.get("relevant_passages")][:n_items]
+    if verbose:
+        mode_str = {
+            "async": f"async (max={n_async_workers})",
+            "threaded": f"threaded (n={n_async_workers})",
+            "sequential": "sequential",
+        }[llm_mode]
+        print(f"\n{'='*72}")
+        print(f"END-TO-END COMBO COMPARISON ({len(good)} queries, K={k}, LLM={mode_str})")
+        print(f"{'='*72}")
+
+    # Pre-embed all queries once (shared across combos)
+    embedder = LocalEmbedder(device="cpu")
+    if verbose:
+        print("Warming up embedder + Numba JIT...")
+    _ = embedder.embed_query("warmup")
+    warmup_friend_numba()
+
+    q_vecs = embedder.embed_texts([q["text"] for q in good], show_progress=False)
+
+    ivf_n_clusters = getattr(ivf, "n_clusters", "?")
+    ivf_label = f"IVF({ivf_n_clusters},{n_probes})"
+
+    combos = [
+        {
+            "label": "A. BF + NumPy (no opts)",
+            "index": bf,
+            "sim_fn": cosine_sim_numpy,
+            "search_kwargs": {"use_precomputed_norms": False},
+            "components": {
+                "index":      "BruteForce",
+                "sim_fn":     "cosine_sim_numpy",
+                "norm_cache": "OFF",
+                "np_gather":  "N/A",
+            },
+        },
+        {
+            "label": "B. IVF + NumPy + cache + gather",
+            "index": ivf,
+            "sim_fn": cosine_sim_numpy,
+            "search_kwargs": {
+                "n_probes": n_probes,
+                "use_precomputed_norms": True,
+                "use_numpy_candidate_gather": True,
+            },
+            "components": {
+                "index":      ivf_label,
+                "sim_fn":     "cosine_sim_numpy",
+                "norm_cache": "ON",
+                "np_gather":  "ON",
+            },
+        },
+        {
+            "label": "C. IVF + Numba par + cache + gather",
+            "index": ivf,
+            "sim_fn": cosine_sim_numba_parallel_precomputed,
+            "search_kwargs": {
+                "n_probes": n_probes,
+                "use_precomputed_norms": True,
+                "use_numpy_candidate_gather": True,
+            },
+            "components": {
+                "index":      ivf_label,
+                "sim_fn":     "cosine_sim_numba_parallel_precomputed",
+                "norm_cache": "ON",
+                "np_gather":  "ON",
+            },
+        },
+    ]
+
+    results: dict = {}
+    for combo in combos:
+        label = combo["label"]
+        if verbose:
+            print(f"\n--- {label} ---")
+
+        # ---- Stage 1: retrieval (search per query, gather contexts, compute recall) ----
+        recalls, items = [], []
+        t0 = time.perf_counter()
+        for q, qv in zip(good, q_vecs):
+            r = combo["index"].search(qv, k=k, sim_fn=combo["sim_fn"], **combo["search_kwargs"])
+            retrieved_ids = [doc_id for doc_id, _ in r]
+
+            # recall
+            retrieved_texts = {chunk_to_passage.get(did, "") for did in retrieved_ids}
+            relevant = set(q["relevant_passages"])
+            rec = len(retrieved_texts & relevant) / len(relevant) if relevant else 0.0
+            recalls.append(rec)
+
+            # contexts for gen
+            contexts = [chunk_by_id.get(did, "") for did, _ in r]
+            items.append((q["text"], contexts))
+        retrieve_total_ms = (time.perf_counter() - t0) * 1000
+
+        # ---- Stage 2: LLM generation on all N prepared items (mode-dependent) ----
+        gen = make_kong_generator(model="gpt-4o", max_tokens=max_tokens)
+        if llm_mode == "async":
+            wrapped = AsyncGenerator(gen, max_concurrent=n_async_workers)
+        elif llm_mode == "threaded":
+            wrapped = ThreadedGenerator(gen, n_workers=n_async_workers)
+        else:  # sequential
+            wrapped = gen   # BaselineGenerator.generate_batch is serial
+        t0 = time.perf_counter()
+        _ = wrapped.generate_batch(items)
+        gen_total_ms = (time.perf_counter() - t0) * 1000
+
+        end_to_end_ms = retrieve_total_ms + gen_total_ms
+
+        results[label] = {
+            "components":            combo["components"],
+            "recall@k":              float(np.mean(recalls)),
+            "retrieve_total_ms":     retrieve_total_ms,
+            "retrieve_per_query_ms": retrieve_total_ms / len(good),
+            "gen_total_ms":          gen_total_ms,
+            "gen_per_call_ms":       gen_total_ms / len(good),
+            "end_to_end_ms":         end_to_end_ms,
+            "n":                     len(good),
+        }
+
+        if verbose:
+            r = results[label]
+            print(f"  Recall@{k}        : {r['recall@k']:.4f}")
+            print(f"  Retrieve total   : {r['retrieve_total_ms']:7.1f} ms "
+                  f"({r['retrieve_per_query_ms']:.2f} ms/query)")
+            print(f"  Gen total        : {r['gen_total_ms']:7.1f} ms "
+                  f"({r['gen_per_call_ms']:.0f} ms/call amortized)")
+            print(f"  End-to-end batch : {end_to_end_ms:7.1f} ms")
+
+    # Compute speedups vs config A
+    base_e2e = results[combos[0]["label"]]["end_to_end_ms"]
+    base_retrieve = results[combos[0]["label"]]["retrieve_per_query_ms"]
+    for lbl, d in results.items():
+        d["end_to_end_speedup_vs_A"] = base_e2e / d["end_to_end_ms"]
+        d["retrieve_speedup_vs_A"]   = base_retrieve / d["retrieve_per_query_ms"]
+
+    if verbose:
+        print(f"\n{'='*120}")
+        print(f"  SUMMARY ({len(good)} queries, K={k}, LLM={mode_str}, "
+              f"non-streaming, real Kong gpt-4o)")
+        print(f"{'='*120}")
+        print(f"  {'Index':<11s} {'Sim fn':<37s} {'norm':>5s} {'gather':>7s}  "
+              f"{'Recall':>7s} {'Retrieve/q':>11s} {'Gen/call':>10s} {'E2E':>9s} {'E2E spd':>9s}")
+        print(f"  {'-'*118}")
+        for label, r in results.items():
+            c = r["components"]
+            print(f"  {c['index']:<11s} {c['sim_fn']:<37s} "
+                  f"{c['norm_cache']:>5s} {c['np_gather']:>7s}  "
+                  f"{r['recall@k']:>7.4f} "
+                  f"{r['retrieve_per_query_ms']:>8.2f} ms "
+                  f"{r['gen_per_call_ms']:>7.0f} ms "
+                  f"{r['end_to_end_ms']/1000:>7.2f} s "
+                  f"{r['end_to_end_speedup_vs_A']:>7.2f}x")
+
+    results["_meta"] = {
+        "n_items":         len(good),
+        "k":               k,
+        "n_probes":        n_probes,
+        "n_async_workers": n_async_workers,
+        "max_tokens":      max_tokens,
+        "llm_mode":        llm_mode,
+    }
+    return results
+
+
+def run_endtoend_combos_grid(
+    queries: list,
+    chunks: list,
+    bf,
+    ivf,
+    data_dir,
+    n_items: int = 8,
+    k: int = 3,
+    n_probes: int = 8,
+    n_async_workers: int = 8,
+    max_tokens: int = 128,
+    llm_modes: tuple = ("async", "threaded"),
+    verbose: bool = True,
+) -> dict:
+    """
+    Run run_endtoend_combos for EVERY LLM mode in `llm_modes` (default: async + threaded),
+    producing a 3 retrieval combos x N llm modes grid. At the end prints a single
+    unified table so you can see the full grid in one shot.
+
+    Total real Kong calls = len(combos in run_endtoend_combos) * len(llm_modes) * n_items
+    Default: 3 * 2 * 8 = 48 calls, ~$0.20.
+    """
+    grid: dict = {}
+    for mode in llm_modes:
+        if verbose:
+            print(f"\n{'#'*72}")
+            print(f"#  GRID: LLM mode = {mode}")
+            print(f"{'#'*72}")
+        grid[mode] = run_endtoend_combos(
+            queries, chunks, bf, ivf, data_dir,
+            n_items=n_items, k=k, n_probes=n_probes,
+            n_async_workers=n_async_workers, max_tokens=max_tokens,
+            llm_mode=mode, verbose=verbose,
+        )
+
+    # Unified grid summary
+    if verbose:
+        # Pull n_clusters off the IVF object for the constants header
+        ivf_n_clusters = getattr(ivf, "n_clusters", "?")
+        n_combos = sum(
+            1 for label in next(iter(grid.values())).keys()
+            if not label.startswith("_")
+        ) if grid else 0
+
+        print(f"\n{'='*128}")
+        print(f"  COMPONENTS HELD CONSTANT (same for every row below)")
+        print(f"  {'-'*124}")
+        print(f"  Embedder      : LocalEmbedder (all-MiniLM-L6-v2, CPU; "
+              f"queries pre-embedded once and shared across combos)")
+        print(f"  LLM model     : gpt-4o via Kong proxy")
+        print(f"  Generation    : non-streaming (full response per call)")
+        print(f"  Max tokens    : {max_tokens}")
+        print(f"  N queries     : {n_items}")
+        print(f"  Top-K         : {k}")
+        print(f"  IVF setup     : {ivf_n_clusters} clusters, n_probes={n_probes}")
+        print(f"  LLM workers   : {n_async_workers}  (used by 'async' max_concurrent / 'threaded' n_workers)")
+        print(f"{'='*128}")
+        print(f"  GRID: {n_combos} retrieval combos x {len(grid)} LLM modes "
+              f"= {n_combos*len(grid)} pipelines (each timed end-to-end)")
+        print(f"{'='*128}")
+        print(f"  {'LLM mode':<11s} {'Index':<11s} {'Sim fn':<37s} "
+              f"{'norm':>5s} {'gather':>7s}  "
+              f"{'Recall':>7s} {'Retrieve/q':>11s} {'Gen/call':>10s} {'E2E':>9s}")
+        print(f"  {'-'*126}")
+        for mode, results in grid.items():
+            for label, r in results.items():
+                if label.startswith("_"):
+                    continue
+                c = r["components"]
+                print(f"  {mode:<11s} {c['index']:<11s} {c['sim_fn']:<37s} "
+                      f"{c['norm_cache']:>5s} {c['np_gather']:>7s}  "
+                      f"{r['recall@k']:>7.4f} "
+                      f"{r['retrieve_per_query_ms']:>8.2f} ms "
+                      f"{r['gen_per_call_ms']:>7.0f} ms "
+                      f"{r['end_to_end_ms']/1000:>7.2f} s")
+        print(f"  {'='*126}")
+
+        # Find the global best E2E and report which full pipeline won
+        best_label, best_mode, best_e2e, best_comp = None, None, float("inf"), None
+        for mode, results in grid.items():
+            for label, r in results.items():
+                if label.startswith("_"):
+                    continue
+                if r["end_to_end_ms"] < best_e2e:
+                    best_e2e   = r["end_to_end_ms"]
+                    best_label = label
+                    best_mode  = mode
+                    best_comp  = r["components"]
+        print(f"\n  Best end-to-end pipeline:")
+        print(f"    LLM mode    : {best_mode}")
+        print(f"    Index       : {best_comp['index']}")
+        print(f"    Sim fn      : {best_comp['sim_fn']}")
+        print(f"    norm cache  : {best_comp['norm_cache']}")
+        print(f"    np gather   : {best_comp['np_gather']}")
+        print(f"    -> {best_e2e/1000:.2f} s for {n_items} queries end-to-end")
+
+    grid["_meta"] = {
+        "n_items":   n_items,
+        "k":         k,
+        "n_probes":  n_probes,
+        "llm_modes": list(llm_modes),
+    }
+    return grid
+
+
+# =====================================================================
 # Step 5 -- Pipeline parallelism (Week 10/11)
 # =====================================================================
 
