@@ -21,6 +21,9 @@ python rag-optimization/build_knowledge_base.py --download --size medium --data_
 # 3. Run the full CPU benchmark (similarity + retrieval + K-Means variants)
 python rag-optimization/run_test.py --data_dir rag-optimization/data/medium --device cpu --with_build
 
+# Optional: explore IVF n-probe trade-off
+python rag-optimization/benchmarks/nprobe_tradeoff.py --data_dir rag-optimization/data/medium --probes 1 2 4 8 16 32 64
+
 # 4. Add real LLM benchmarks (requires ChatGPT_API_KEY env var, ~$0.15)
 python rag-optimization/run_test.py --data_dir rag-optimization/data/medium --device cpu --with_build --with_llm
 
