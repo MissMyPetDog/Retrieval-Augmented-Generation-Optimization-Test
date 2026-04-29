@@ -154,7 +154,6 @@ def run(dataset: str = "medium", n_queries: int = 8, k: int = 3,
             "recall@k": mean([p["recall@k"] for p in per_query_timings]),
         },
         "batch_total_ms":  batch_ms,
-        "n_queries":       n_queries,
     }
 
     print_summary(result)

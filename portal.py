@@ -1108,6 +1108,7 @@ def run_endtoend_combos(
     n_async_workers: int = 8,
     max_tokens: int = 128,
     llm_mode: str = "async",         # "async" | "threaded" | "sequential"
+    embed_mode: str = "batch",       # "batch" | "per_query"
     verbose: bool = True,
 ) -> dict:
     """
@@ -1131,6 +1132,8 @@ def run_endtoend_combos(
 
     if llm_mode not in ("async", "threaded", "sequential"):
         raise ValueError(f"llm_mode must be 'async' | 'threaded' | 'sequential'; got {llm_mode!r}")
+    if embed_mode not in ("batch", "per_query"):
+        raise ValueError(f"embed_mode must be 'batch' | 'per_query'; got {embed_mode!r}")
 
     chunk_to_passage = _load_chunk_to_passage_text(data_dir, chunks)
     chunk_by_id = {c["id"]: c["text"] for c in chunks}
@@ -1153,7 +1156,16 @@ def run_endtoend_combos(
     _ = embedder.embed_query("warmup")
     warmup_friend_numba()
 
-    q_vecs = embedder.embed_texts([q["text"] for q in good], show_progress=False)
+    # Batch-embed all queries up front IF requested. In per-query mode each combo
+    # embeds inside its own loop, paying per-query model overhead, and reports its
+    # own embed timing.
+    if embed_mode == "batch":
+        t_embed = time.perf_counter()
+        q_vecs = embedder.embed_texts([q["text"] for q in good], show_progress=False)
+        embed_total_ms_batch = (time.perf_counter() - t_embed) * 1000
+    else:
+        q_vecs = None
+        embed_total_ms_batch = 0.0
 
     ivf_n_clusters = getattr(ivf, "n_clusters", "?")
     ivf_label = f"IVF({ivf_n_clusters},{n_probes})"
@@ -1211,23 +1223,35 @@ def run_endtoend_combos(
         if verbose:
             print(f"\n--- {label} ---")
 
-        # ---- Stage 1: retrieval (search per query, gather contexts, compute recall) ----
+        # ---- Stage 1: retrieval (embed if per-query, search, gather contexts, compute recall) ----
         recalls, items = [], []
-        t0 = time.perf_counter()
-        for q, qv in zip(good, q_vecs):
-            r = combo["index"].search(qv, k=k, sim_fn=combo["sim_fn"], **combo["search_kwargs"])
-            retrieved_ids = [doc_id for doc_id, _ in r]
+        embed_ms_combo = 0.0
+        search_ms_combo = 0.0
+        for i, q in enumerate(good):
+            # 1) Embed
+            if embed_mode == "batch":
+                qv = q_vecs[i]   # already embedded outside, no per-query cost
+            else:
+                t_e = time.perf_counter()
+                qv = embedder.embed_query(q["text"])
+                embed_ms_combo += (time.perf_counter() - t_e) * 1000
 
-            # recall
+            # 2) Search (timed alone)
+            t_s = time.perf_counter()
+            r = combo["index"].search(qv, k=k, sim_fn=combo["sim_fn"], **combo["search_kwargs"])
+            search_ms_combo += (time.perf_counter() - t_s) * 1000
+
+            # 3) Untimed bookkeeping
+            retrieved_ids = [doc_id for doc_id, _ in r]
             retrieved_texts = {chunk_to_passage.get(did, "") for did in retrieved_ids}
             relevant = set(q["relevant_passages"])
             rec = len(retrieved_texts & relevant) / len(relevant) if relevant else 0.0
             recalls.append(rec)
-
-            # contexts for gen
             contexts = [chunk_by_id.get(did, "") for did, _ in r]
             items.append((q["text"], contexts))
-        retrieve_total_ms = (time.perf_counter() - t0) * 1000
+
+        embed_total_ms    = embed_total_ms_batch if embed_mode == "batch" else embed_ms_combo
+        retrieve_total_ms = search_ms_combo
 
         # ---- Stage 2: LLM generation on all N prepared items (mode-dependent) ----
         gen = make_kong_generator(model="gpt-4o", max_tokens=max_tokens)
@@ -1241,11 +1265,13 @@ def run_endtoend_combos(
         _ = wrapped.generate_batch(items)
         gen_total_ms = (time.perf_counter() - t0) * 1000
 
-        end_to_end_ms = retrieve_total_ms + gen_total_ms
+        end_to_end_ms = embed_total_ms + retrieve_total_ms + gen_total_ms
 
         results[label] = {
             "components":            combo["components"],
             "recall@k":              float(np.mean(recalls)),
+            "embed_total_ms":        embed_total_ms,
+            "embed_per_query_ms":    embed_total_ms / len(good),
             "retrieve_total_ms":     retrieve_total_ms,
             "retrieve_per_query_ms": retrieve_total_ms / len(good),
             "gen_total_ms":          gen_total_ms,
@@ -1311,6 +1337,7 @@ def run_endtoend_combos_grid(
     n_async_workers: int = 8,
     max_tokens: int = 128,
     llm_modes: tuple = ("async", "threaded"),
+    embed_mode: str = "batch",         # "batch" | "per_query"
     verbose: bool = True,
 ) -> dict:
     """
@@ -1331,7 +1358,7 @@ def run_endtoend_combos_grid(
             queries, chunks, bf, ivf, data_dir,
             n_items=n_items, k=k, n_probes=n_probes,
             n_async_workers=n_async_workers, max_tokens=max_tokens,
-            llm_mode=mode, verbose=verbose,
+            llm_mode=mode, embed_mode=embed_mode, verbose=verbose,
         )
 
     # Unified grid summary

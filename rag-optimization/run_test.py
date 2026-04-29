@@ -655,8 +655,9 @@ def run_all(data_dir, device, skip_pure_python=False, similarity_only=False,
 
 def main():
     parser = argparse.ArgumentParser(description="Run RAG benchmarks")
-    parser.add_argument("--data_dir", default="data",
-                        help="Data directory with built knowledge base")
+    parser.add_argument("--data_dir", default="data/medium",
+                        help="Data directory with built knowledge base "
+                             "(default: data/medium; use data/small for the small dataset)")
     parser.add_argument("--device", choices=["cpu", "cuda", "both"], default="cpu",
                         help="cpu=pure CPU test, cuda=with GPU, both=run both and compare")
     parser.add_argument("--skip_pure_python", action="store_true",
