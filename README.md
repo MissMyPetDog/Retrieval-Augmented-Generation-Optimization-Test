@@ -85,25 +85,25 @@ Each stage has a different bottleneck type — CPU math for search, IO wait for 
 
 | Configuration                                         | Recall@10  | MRR        | Latency     | Search speedup |
 | :---------------------------------------------------- | :--------- | :--------- | :---------- | :------------- |
-| BruteForce + NumPy                                    | **0.891** | 0.494     | 68.1 ms     | 1.00×          |
-| BruteForce + NumPy (norm cache)                       | 0.891     | 0.494     | 12.5 ms     | 5.43×          |
-| BruteForce + Numba parallel                           | 0.891     | 0.494     | 19.1 ms     | 3.56×          |
-| IVF(64, 8) + NumPy                                    | 0.851     | 0.474     | 21.6 ms     | 3.15×          |
-| IVF(64, 8) + NumPy (norm cache)                       | 0.851     | 0.474     | 13.9 ms     | 4.90×          |
-| **IVF(64, 8) + NumPy (norm cache, batch embed)**      | **0.851** | **0.474** | **7.27 ms** | **9.37×**      |
-| IVF(64, 8) + Numba parallel                           | 0.851     | 0.474     | 19.3 ms     | 3.53×          |
-| IVF(64, 8) + Numba parallel (norm cache, batch embed) | 0.851     | 0.474     | 9.91 ms     | 6.87×          |
+| BruteForce + NumPy                                    | **0.8908** | 0.4937     | 68.1 ms     | 1.00×          |
+| BruteForce + NumPy (norm cache)                       | 0.8908     | 0.4937     | 12.5 ms     | 5.43×          |
+| BruteForce + Numba parallel                           | 0.8908     | 0.4937     | 19.1 ms     | 3.56×          |
+| IVF(64, 8) + NumPy                                    | 0.8908     | 0.4740     | 21.6 ms     | 3.15×          |
+| IVF(64, 8) + NumPy (norm cache)                       | 0.8508     | 0.4740     | 13.9 ms     | 4.90×          |
+| **IVF(64, 8) + NumPy (norm cache, batch embed)**      | **0.8508** | **0.4740** | **7.27 ms** | **9.37×**      |
+| IVF(64, 8) + Numba parallel                           | 0.8508     | 0.4740     | 19.3 ms     | 3.53×          |
+| IVF(64, 8) + Numba parallel (norm cache, batch embed) | 0.8508     | 0.4740     | 9.91 ms     | 6.87×          |
 
 IVF trades ~4.5% recall for 5-9× faster queries. The "norm cache + batch embed" combination is the clear winner on CPU.
 
 
 ### LLM: concurrency (batch throughput, 8 gpt-4o calls)
 
-| Mode              | Batch total (s)  | Speedup   |
+| Mode              | Batch total  | Speedup   |
 | :---------------- | :----------- | :-------- |
-| Sequential        | 13.1    | 1.00×     |
-| Threaded (n=8)    | 6.69     | 1.96×     |
-| **Async (max=8)** | **4.92** | **2.66×** |
+| Sequential        | 13,099 ms    | 1.00×     |
+| Threaded (n=8)    | 6,688 ms     | 1.96×     |
+| **Async (max=8)** | **4,920 ms** | **2.66×** |
 
 ### End-to-end inference latency comparison (8 queries, gpt-4o)
 
