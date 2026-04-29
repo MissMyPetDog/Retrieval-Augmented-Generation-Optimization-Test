@@ -13,7 +13,7 @@ Reuses:
   - comparisons/run_bruteforce.py (config 1, exact match)
   - portal.run_endtoend_combos_grid (configs 2-5, B & C combos x 2 LLM modes)
 
-Real Kong gpt-4o calls: 8 (config 1) + 6*8 (full grid, 2 BF cells discarded) = 56 calls (~$0.22).
+Real ChatGPT gpt-4o calls: 8 (config 1) + 6*8 (full grid, 2 BF cells discarded) = 56 calls (~$0.22).
 """
 from __future__ import annotations
 
@@ -33,14 +33,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-n", "--n_queries", type=int, default=8,
                     help="number of queries per config (default: 8). "
-                         "Total real Kong calls = n_queries * 7 (1 sequential BF + "
+                         "Total real ChatGPT calls = n_queries * 7 (1 sequential BF + "
                          "3 retrieval combos x 2 LLM modes).")
     ap.add_argument("--dataset",         default="medium")
     ap.add_argument("--k",               type=int, default=3)
     ap.add_argument("--max_tokens",      type=int, default=128)
     ap.add_argument("-w", "--n_async_workers", type=int, default=8,
                     help="LLM concurrency for configs 2-5 (async max_concurrent / "
-                         "threaded n_workers). Default 8. Try 16/32/64 to probe Kong's "
+                         "threaded n_workers). Default 8. Try 16/32/64 to probe ChatGPT's "
                          "concurrency cap.")
     ap.add_argument("--no_batch_embed", action="store_true",
                     help="Configs 2-5 use per-query embed instead of batch embed. "
@@ -56,7 +56,7 @@ def main():
     print(f"\nConfig: n_queries={n}, k={args.k}, max_tokens={args.max_tokens}, "
           f"dataset={args.dataset}, n_async_workers={args.n_async_workers}, "
           f"embed_mode={embed_mode}")
-    print(f"Real Kong calls planned: {cost_calls}  (~${cost_calls * 0.004:.2f} at ~$0.004/call)")
+    print(f"Real ChatGPT calls planned: {cost_calls}  (~${cost_calls * 0.004:.2f} at ~$0.004/call)")
 
     portal.setup_cpu_only()
     vectors, chunks, queries, data_dir, _ = portal.load_knowledge_base(args.dataset)

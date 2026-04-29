@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (
     setup_cpu_only, load_knowledge_base, get_test_queries,
-    build_chunk_to_passage_text, make_kong_generator,
+    build_chunk_to_passage_text, make_chatgpt_generator,
     compute_recall, mean, save_result, print_summary, warmup_embedder,
 )
 setup_cpu_only(verbose=True)
@@ -55,7 +55,7 @@ def run(dataset: str = "medium", n_queries: int = 8, k: int = 3,
     # --- Set up services (not timed) ---
     embedder = LocalEmbedder(device="cpu")
     warmup_embedder(embedder)     # trigger lazy model load BEFORE timing
-    gen = make_kong_generator(max_tokens=max_tokens)
+    gen = make_chatgpt_generator(max_tokens=max_tokens)
 
     # --- Run queries serially, time each stage ---
     print(f"\nRunning {n_queries} queries end-to-end (serial, non-streaming)...")

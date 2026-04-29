@@ -507,7 +507,7 @@ def run_llm_tests(vectors, doc_ids, chunk_lookup, queries,
     """
     Real-API LLM benchmarks (Step 4 + Step 5 + Section 7 of the optimization journey).
 
-    Hits NYU's Kong gpt-4o endpoint. Requires KONG_API_KEY env var.
+    Hits NYU's ChatGPT-4o endpoint. Requires KONG_API_KEY env var.
     Cost: ~8 calls x 4-5 modes ~= 35 real API calls, ~$0.15 per run.
 
     Three sections:
@@ -521,7 +521,7 @@ def run_llm_tests(vectors, doc_ids, chunk_lookup, queries,
         return {"skipped": True, "reason": "no_api_key"}
 
     print(f"\n{'='*65}")
-    print(f"LLM BENCHMARK (real Kong gpt-4o, ~{n_queries * 4} API calls)")
+    print(f"LLM BENCHMARK (real ChatGPT-4o, ~{n_queries * 4} API calls)")
     print(f"{'='*65}")
 
     # Import portal from project root for shared LLM benchmark logic

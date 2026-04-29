@@ -5,7 +5,7 @@ Run all 3 RAG pipeline configurations end-to-end and print a unified comparison.
   Config 2: IVF default            (basic structural optimization)
   Config 3: Fully optimized        (all 6 steps stacked, pipelined streaming)
 
-Real Kong gpt-4o calls: ~24 (8 queries x 3 configs), ~$0.10.
+Real ChatGPT-4o calls: ~24 (8 queries x 3 configs), ~$0.10.
 Requires KONG_API_KEY env var.
 """
 import sys

@@ -5,7 +5,7 @@ Run the end-to-end COMBO GRID and print one table:
 Each row of the output names every component used (Index, Sim fn, norm_cache,
 np_gather, LLM mode), then reports Recall, Retrieve/q, Gen/call, and E2E batch time.
 
-Default: 3 retrieval combos x 2 LLM modes x 8 queries = 48 real Kong calls (~$0.20).
+Default: 3 retrieval combos x 2 LLM modes x 8 queries = 48 real ChatGPT calls (~$0.20).
 
 Usage:
     python run_combo_grid.py

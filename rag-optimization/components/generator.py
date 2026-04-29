@@ -210,7 +210,7 @@ class BaselineGenerator:
         return response.content[0].text
 
     def _openai_generate(self, prompt: str) -> str:
-        """Call OpenAI-compatible API (supports custom base_url and headers, e.g., NYU Kong)."""
+        """Call OpenAI-compatible API (supports custom base_url and headers, e.g., NYU ChatGPT API)."""
         import openai
         client_kwargs = {"api_key": self.api_key}
         if self.base_url:
@@ -272,7 +272,7 @@ class BaselineGenerator:
         }
 
     def _openai_generate_stream(self, prompt: str, prompt_tokens: int) -> dict:
-        """OpenAI-compatible streaming call (works with NYU Kong proxy)."""
+        """OpenAI-compatible streaming call (works with NYU ChatGPT API)."""
         import openai
         client_kwargs = {"api_key": self.api_key}
         if self.base_url:

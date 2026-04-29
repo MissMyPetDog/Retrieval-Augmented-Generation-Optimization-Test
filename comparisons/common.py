@@ -78,9 +78,9 @@ def build_chunk_to_passage_text(chunks: list, data_dir: Path) -> dict:
 
 
 # ---------------------------------------------------------------------
-# Kong gpt-4o generator (real API)
+# ChatGPT-4o generator (real API)
 # ---------------------------------------------------------------------
-def make_kong_generator(max_tokens: int = 128):
+def make_chatgpt_generator(max_tokens: int = 128):
     from components.generator import BaselineGenerator
     api_key = os.environ["KONG_API_KEY"]
     return BaselineGenerator(

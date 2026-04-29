@@ -605,15 +605,15 @@ def plot_async_embedding(results: dict) -> None:
 
 
 # =====================================================================
-# Section 7 -- Async generation (REAL Kong gpt-4o)
+# Section 7 -- Async generation (REAL ChatGPT-4o)
 # =====================================================================
 
-KONG_BASE_URL = "https://kong-api.prod1.nyumc.org/gpt-4o/v1.3.0"
+CHATGPT_BASE_URL = "https://kong-api.prod1.nyumc.org/gpt-4o/v1.3.0"
 
 
-def make_kong_generator(model: str = "gpt-4o", max_tokens: int = 128):
+def make_chatgpt_generator(model: str = "gpt-4o", max_tokens: int = 128):
     """
-    Build a BaselineGenerator wired to NYU's Kong gpt-4o proxy.
+    Build a BaselineGenerator wired to NYU's ChatGPT-4o proxy.
     Reads KONG_API_KEY from env. Returns the generator.
     """
     from components.generator import BaselineGenerator
@@ -622,7 +622,7 @@ def make_kong_generator(model: str = "gpt-4o", max_tokens: int = 128):
         api_provider="openai",
         api_key=api_key,
         model_name=model,
-        base_url=KONG_BASE_URL,
+        base_url=CHATGPT_BASE_URL,
         extra_headers={"api-key": api_key},
         max_tokens=max_tokens,
     )
@@ -671,7 +671,7 @@ def run_async_generation_benchmarks(
     verbose: bool = True,
 ) -> dict:
     """
-    Run the same batch of (query, contexts) pairs through the Kong gpt-4o API
+    Run the same batch of (query, contexts) pairs through the ChatGPT-4o API
     in three modes:
       1. Sequential (BaselineGenerator.generate_batch)
       2. Threaded   (ThreadedGenerator, n_workers)
@@ -686,7 +686,7 @@ def run_async_generation_benchmarks(
     sample_answer = None
 
     # ---- 1. Sequential ----
-    gen = make_kong_generator(model=model, max_tokens=max_tokens)
+    gen = make_chatgpt_generator(model=model, max_tokens=max_tokens)
     if verbose:
         print(f"\n[1/3] Sequential : sending {n} real API calls one-by-one...")
     t0 = time.perf_counter()
@@ -699,7 +699,7 @@ def run_async_generation_benchmarks(
               f"(mean per call: {seq_ms/n:6.1f} ms)")
 
     # ---- 2. Threaded ----
-    gen = make_kong_generator(model=model, max_tokens=max_tokens)
+    gen = make_chatgpt_generator(model=model, max_tokens=max_tokens)
     threaded = ThreadedGenerator(gen, n_workers=n_threads)
     if verbose:
         print(f"[2/3] Threaded   : firing {n} calls with {n_threads} threads...")
@@ -712,7 +712,7 @@ def run_async_generation_benchmarks(
               f"({seq_ms/thr_ms:5.2f}x vs sequential)")
 
     # ---- 3. Async ----
-    gen = make_kong_generator(model=model, max_tokens=max_tokens)
+    gen = make_chatgpt_generator(model=model, max_tokens=max_tokens)
     async_gen = AsyncGenerator(gen, max_concurrent=max_async)
     if verbose:
         print(f"[3/3] Async      : firing {n} calls with max_concurrent={max_async}...")
@@ -756,7 +756,7 @@ def plot_async_generation(results: dict) -> None:
 
     bars1 = ax1.bar(names, totals, color=colors, edgecolor="black")
     ax1.set_ylabel("Total time (ms)")
-    ax1.set_title(f"Kong {meta.get('model','gpt-4o')} generation -- "
+    ax1.set_title(f"ChatGPT {meta.get('model','gpt-4o')} generation -- "
                   f"{meta.get('n_items','?')} real API calls")
     ax1.tick_params(axis="x", rotation=15)
     for bar, t in zip(bars1, totals):
@@ -789,7 +789,7 @@ def run_streaming_generation_benchmarks(
     verbose: bool = True,
 ) -> dict:
     """
-    Three-way comparison of real Kong gpt-4o generation:
+    Three-way comparison of real ChatGPT-4o generation:
       1. Sequential, NON-streaming        (Section 7 baseline -- perceived = total)
       2. Sequential, streaming            (TTFT drops sharply, total unchanged)
       3. Concurrent, streaming (threaded) (best of both: low TTFT AND low total)
@@ -813,7 +813,7 @@ def run_streaming_generation_benchmarks(
         }
 
     # ---- 1. Sequential non-streaming (matches Section 7 baseline) ----
-    gen = make_kong_generator(model=model, max_tokens=max_tokens)
+    gen = make_chatgpt_generator(model=model, max_tokens=max_tokens)
     if verbose:
         print(f"\n[1/3] Sequential NON-streaming : {n} real calls, one by one...")
     t0 = time.perf_counter()
@@ -829,7 +829,7 @@ def run_streaming_generation_benchmarks(
               f"mean TTFT: {r['mean_ttft_ms']:.0f} ms")
 
     # ---- 2. Sequential streaming ----
-    gen = make_kong_generator(model=model, max_tokens=max_tokens)
+    gen = make_chatgpt_generator(model=model, max_tokens=max_tokens)
     if verbose:
         print(f"[2/3] Sequential STREAMING     : same {n} calls, stream=True...")
     t0 = time.perf_counter()
@@ -845,7 +845,7 @@ def run_streaming_generation_benchmarks(
               f"(TTFT -{(1 - r['mean_ttft_ms']/results['Sequential (non-stream)']['mean_ttft_ms'])*100:.0f}%)")
 
     # ---- 3. Concurrent streaming (ThreadPool + per-call streaming) ----
-    gen = make_kong_generator(model=model, max_tokens=max_tokens)
+    gen = make_chatgpt_generator(model=model, max_tokens=max_tokens)
     if verbose:
         print(f"[3/3] CONCURRENT streaming     : {n} calls, {concurrent_workers} workers, stream=True...")
     t0 = time.perf_counter()
@@ -1093,7 +1093,7 @@ def plot_friend_benchmarks(results: dict) -> None:
 
 
 # =====================================================================
-# End-to-end COMBO comparison (stacks components, real Kong gpt-4o)
+# End-to-end COMBO comparison (stacks components, real ChatGPT-4o)
 # =====================================================================
 
 def run_endtoend_combos(
@@ -1254,7 +1254,7 @@ def run_endtoend_combos(
         retrieve_total_ms = search_ms_combo
 
         # ---- Stage 2: LLM generation on all N prepared items (mode-dependent) ----
-        gen = make_kong_generator(model="gpt-4o", max_tokens=max_tokens)
+        gen = make_chatgpt_generator(model="gpt-4o", max_tokens=max_tokens)
         if llm_mode == "async":
             wrapped = AsyncGenerator(gen, max_concurrent=n_async_workers)
         elif llm_mode == "threaded":
@@ -1299,7 +1299,7 @@ def run_endtoend_combos(
     if verbose:
         print(f"\n{'='*120}")
         print(f"  SUMMARY ({len(good)} queries, K={k}, LLM={mode_str}, "
-              f"non-streaming, real Kong gpt-4o)")
+              f"non-streaming, real ChatGPT-4o)")
         print(f"{'='*120}")
         print(f"  {'Index':<11s} {'Sim fn':<37s} {'norm':>5s} {'gather':>7s}  "
               f"{'Recall':>7s} {'Retrieve/q':>11s} {'Gen/call':>10s} {'E2E':>9s} {'E2E spd':>9s}")
@@ -1345,7 +1345,7 @@ def run_endtoend_combos_grid(
     producing a 3 retrieval combos x N llm modes grid. At the end prints a single
     unified table so you can see the full grid in one shot.
 
-    Total real Kong calls = len(combos in run_endtoend_combos) * len(llm_modes) * n_items
+    Total real ChatGPT calls = len(combos in run_endtoend_combos) * len(llm_modes) * n_items
     Default: 3 * 2 * 8 = 48 calls, ~$0.20.
     """
     grid: dict = {}
@@ -1375,7 +1375,7 @@ def run_endtoend_combos_grid(
         print(f"  {'-'*124}")
         print(f"  Embedder      : LocalEmbedder (all-MiniLM-L6-v2, CPU; "
               f"queries pre-embedded once and shared across combos)")
-        print(f"  LLM model     : gpt-4o via Kong proxy")
+        print(f"  LLM model     : gpt-4o via ChatGPT proxy")
         print(f"  Generation    : non-streaming (full response per call)")
         print(f"  Max tokens    : {max_tokens}")
         print(f"  N queries     : {n_items}")
@@ -1448,7 +1448,7 @@ def run_pipeline_benchmarks(
     verbose: bool = True,
 ) -> dict:
     """
-    Two end-to-end RAG-serving patterns, real Kong gpt-4o calls:
+    Two end-to-end RAG-serving patterns, real ChatGPT-4o calls:
 
       A) SEQUENTIAL (naive baseline):
          For each query in order: embed -> search -> gen (streaming).
@@ -1477,7 +1477,7 @@ def run_pipeline_benchmarks(
     results: dict = {}
 
     # ---- A. Sequential naive baseline ----
-    gen = make_kong_generator(model=model, max_tokens=max_tokens)
+    gen = make_chatgpt_generator(model=model, max_tokens=max_tokens)
     if verbose:
         print(f"\n[1/2] Sequential (naive): {n_items} queries, one at a time "
               f"(embed -> search -> gen_stream)...")
@@ -1495,7 +1495,7 @@ def run_pipeline_benchmarks(
         print(f"      total: {seq_ms:.0f} ms   ({seq_ms/n_items:.0f} ms/query)")
 
     # ---- B. Pipelined: retrieval pool -> gen pool, overlapping ----
-    gen = make_kong_generator(model=model, max_tokens=max_tokens)
+    gen = make_chatgpt_generator(model=model, max_tokens=max_tokens)
     if verbose:
         print(f"[2/2] Pipelined: retrieve pool (n={n_embed_workers}) + "
               f"gen pool (n={n_gen_workers}), overlapping stages...")
@@ -1669,7 +1669,7 @@ def print_summary(RESULTS: dict) -> None:
         best_ms = gen[best_name]["total_ms"]
         meta = gen.get("_meta", {})
         n = meta.get("n_items", "?")
-        print(f"\n[Section 7] LLM generation ({n} real gpt-4o calls via Kong)")
+        print(f"\n[Section 7] LLM generation ({n} real gpt-4o calls via ChatGPT)")
         print(f"  Sequential:            {seq_ms:10.1f} ms  "
               f"(mean {seq_ms/n:.0f} ms/call)")
         print(f"  Best: {best_name:25s} {best_ms:10.1f} ms   ({best_speedup:.2f}x)")
