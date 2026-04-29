@@ -507,7 +507,7 @@ def run_llm_tests(vectors, doc_ids, chunk_lookup, queries,
     """
     Real-API LLM benchmarks (Step 4 + Step 5 + Section 7 of the optimization journey).
 
-    Hits NYU's ChatGPT-4o endpoint. Requires KONG_API_KEY env var.
+    Hits NYU's ChatGPT-4o endpoint. Requires OPENAI_API_KEY env var.
     Cost: ~8 calls x 4-5 modes ~= 35 real API calls, ~$0.15 per run.
 
     Three sections:
@@ -515,9 +515,9 @@ def run_llm_tests(vectors, doc_ids, chunk_lookup, queries,
       2. LLM streaming          (non-stream vs stream, TTFT metric) -- Step 4
       3. Pipelined RAG          (naive serial vs dual-pool)         -- Step 5
     """
-    if "KONG_API_KEY" not in os.environ:
-        print("\n!!! KONG_API_KEY not set in environment -- skipping LLM tests. !!!")
-        print("   Set it with: export KONG_API_KEY=your-key   (or setx on Windows)")
+    if "OPENAI_API_KEY" not in os.environ:
+        print("\n!!! OPENAI_API_KEY not set in environment -- skipping LLM tests. !!!")
+        print("   Set it with: export OPENAI_API_KEY=your-key   (or setx on Windows)")
         return {"skipped": True, "reason": "no_api_key"}
 
     print(f"\n{'='*65}")
@@ -669,12 +669,12 @@ def main():
                              "No API cost.")
     parser.add_argument("--with_llm", action="store_true",
                         help="Also run LLM benchmarks (streaming + concurrent + pipelined). "
-                             "REQUIRES KONG_API_KEY env var. ~$0.15 per run.")
+                             "REQUIRES OPENAI_API_KEY env var. ~$0.15 per run.")
     parser.add_argument("--build_only", action="store_true",
                         help="Only run build-time benchmarks (K-Means variants)")
     parser.add_argument("--llm_only", action="store_true",
                         help="Only run LLM benchmarks (streaming + concurrent + pipelined). "
-                             "REQUIRES KONG_API_KEY.")
+                             "REQUIRES OPENAI_API_KEY.")
     args = parser.parse_args()
 
     data_dir = args.data_dir

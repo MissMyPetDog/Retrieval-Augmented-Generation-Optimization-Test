@@ -82,13 +82,11 @@ def build_chunk_to_passage_text(chunks: list, data_dir: Path) -> dict:
 # ---------------------------------------------------------------------
 def make_chatgpt_generator(max_tokens: int = 128):
     from components.generator import BaselineGenerator
-    api_key = os.environ["KONG_API_KEY"]
+    api_key = os.environ["OPENAI_API_KEY"]
     return BaselineGenerator(
         api_provider="openai",
         api_key=api_key,
         model_name="gpt-4o",
-        base_url="https://kong-api.prod1.nyumc.org/gpt-4o/v1.3.0",
-        extra_headers={"api-key": api_key},
         max_tokens=max_tokens,
     )
 

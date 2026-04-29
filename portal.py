@@ -608,22 +608,17 @@ def plot_async_embedding(results: dict) -> None:
 # Section 7 -- Async generation (REAL ChatGPT-4o)
 # =====================================================================
 
-CHATGPT_BASE_URL = "https://kong-api.prod1.nyumc.org/gpt-4o/v1.3.0"
-
-
 def make_chatgpt_generator(model: str = "gpt-4o", max_tokens: int = 128):
     """
-    Build a BaselineGenerator wired to NYU's ChatGPT-4o proxy.
-    Reads KONG_API_KEY from env. Returns the generator.
+    Build a BaselineGenerator wired to OpenAI's gpt-4o.
+    Reads OPENAI_API_KEY from env. Returns the generator.
     """
     from components.generator import BaselineGenerator
-    api_key = os.environ["KONG_API_KEY"]
+    api_key = os.environ["OPENAI_API_KEY"]
     return BaselineGenerator(
         api_provider="openai",
         api_key=api_key,
         model_name=model,
-        base_url=CHATGPT_BASE_URL,
-        extra_headers={"api-key": api_key},
         max_tokens=max_tokens,
     )
 

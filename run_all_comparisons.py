@@ -6,7 +6,7 @@ Run all 3 RAG pipeline configurations end-to-end and print a unified comparison.
   Config 3: Fully optimized        (all 6 steps stacked, pipelined streaming)
 
 Real ChatGPT-4o calls: ~24 (8 queries x 3 configs), ~$0.10.
-Requires KONG_API_KEY env var.
+Requires OPENAI_API_KEY env var.
 """
 import sys
 from pathlib import Path
