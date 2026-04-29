@@ -1,10 +1,10 @@
 # RAG Pipeline Optimization
 
-A Retrieval-Augmented Generation system built from scratch (no LangChain / LlamaIndex / FAISS), then systematically optimized end-to-end on CPU only.
+A Retrieval-Augmented Generation system built from scratch (no LangChain / LlamaIndex / FAISS), then systematically optimized end-to-end inference latency on CPU only.
 
 Dataset: **MS MARCO `medium`** — 100,000 passages, 500 queries with relevance judgments. LLM endpoint: **ChatGPT-4o**.
 
-Most numbers below are loaded from [`rag-optimization/data/medium/test_results_cpu.json`](rag-optimization/data/medium/test_results_cpu.json) (produced by `run_test.py`); the end-to-end comparison comes from `results/5_configs.json` (produced by `run_5_configs.py`).
+Most numbers below are loaded from [`rag-optimization/data/medium/test_results_cpu.json`](rag-optimization/data/medium/test_results_cpu.json) (produced by `run_test.py`); the end-to-end inference comparison comes from `results/5_configs.json` (produced by `run_5_configs.py`).
 
 ---
 
@@ -27,7 +27,7 @@ python rag-optimization/benchmarks/nprobe_tradeoff.py --data_dir rag-optimizatio
 # 4. Add real LLM benchmarks (requires ChatGPT_API_KEY env var, ~$0.15)
 python rag-optimization/run_test.py --data_dir rag-optimization/data/medium --device cpu --with_build --with_llm
 
-# 5. End-to-end 5-config comparison: full pipeline timed for each component combo
+# 5. End-to-end inference 5-config comparison: full pipeline timed for each component combo
 python run_5_configs.py -n 8                    # default: batch embed, 8 queries (~$0.22)
 python run_5_configs.py -n 8 --no_batch_embed   # per-query embed variant
 python run_5_configs.py -n 100 -w 16            # probe higher LLM concurrency (~$2.80)
@@ -56,12 +56,12 @@ jupyter lab compare_pipelines.ipynb     # 3-way final comparison (BruteForce vs 
 
 `run_5_configs.py`:
 
-| **Flag**             | **Effect**                                                                   |
-| :------------------- | :--------------------------------------------------------------------------- |
-| `-n, --n_queries`    | queries per config (default 8). Total real ChatGPT calls = `n_queries * 7` |
+| **Flag**                | **Effect**                                                                                   |
+| :---------------------- | :------------------------------------------------------------------------------------------- |
+| `-n, --n_queries`       | queries per config (default 8). Total real ChatGPT calls = `n_queries * 7`                   |
 | `-w, --n_async_workers` | LLM concurrency for configs 2-5 (default 8). Try 16/32/64 to probe ChatGPT's concurrency cap |
-| `--no_batch_embed`   | use per-query embed for configs 2-5 (hides Embed/q + batch columns in table) |
-| `--max_tokens`       | LLM max_tokens (default 128)                                                 |
+| `--no_batch_embed`      | use per-query embed for configs 2-5 (hides Embed/q + batch columns in table)                 |
+| `--max_tokens`          | LLM max_tokens (default 128)                                                                 |
 
 ---
 
@@ -85,7 +85,7 @@ Each stage has a different bottleneck type — CPU math for search, IO wait for 
 
 | Configuration                                         | Recall@10  | MRR        | Latency     | Search speedup |
 | :---------------------------------------------------- | :--------- | :--------- | :---------- | :------------- |
-| BruteForce + NumPy -> Baseline                        | **0.8908** | 0.4937     | 68.1 ms     | 1.00×          |
+| BruteForce + NumPy                                    | **0.8908** | 0.4937     | 68.1 ms     | 1.00×          |
 | BruteForce + NumPy (norm cache)                       | 0.8908     | 0.4937     | 12.5 ms     | 5.43×          |
 | BruteForce + Numba parallel                           | 0.8908     | 0.4937     | 19.1 ms     | 3.56×          |
 | IVF(64, 8) + NumPy                                    | 0.8508     | 0.4740     | 21.6 ms     | 3.15×          |
@@ -97,7 +97,7 @@ Each stage has a different bottleneck type — CPU math for search, IO wait for 
 IVF trades ~4.5% recall for 5-9× faster queries. The "norm cache + batch embed" combination is the clear winner on CPU.
 
 
-### LLM: concurrency (batch throughput, 8 real gpt-4o calls)
+### LLM: concurrency (batch throughput, 8 gpt-4o calls)
 
 | Mode              | Batch total  | Speedup   |
 | :---------------- | :----------- | :-------- |
@@ -105,19 +105,29 @@ IVF trades ~4.5% recall for 5-9× faster queries. The "norm cache + batch embed"
 | Threaded (n=8)    | 6,688 ms     | 1.96×     |
 | **Async (max=8)** | **4,920 ms** | **2.66×** |
 
-### End-to-end pipeline comparison (8 queries, real ChatGPT-4o)
+### End-to-end inference latency comparison (8 queries, gpt-4o)
 
-5 fully-stacked pipelines, each timed embed + search + gen. Per-query embed (no batch). Speedup is vs Config 1 (zero-optimization baseline). Numbers from `results/5_configs.json`, produced by `python run_5_configs.py -n 8 --no_batch_embed`.
+5 fully-stacked pipelines, each timed embed + search + gen. Speedup is vs the first row (zero-optimization baseline). Numbers from `results/5_configs.json`, produced by `python run_5_configs.py -n 8`.
 
-| #   | Index       | Sim fn                                  | cache | LLM mode    | Search/q             | Gen/call             | E2E                    |
-| :-- | :---------- | :-------------------------------------- | :---: | :---------- | :------------------- | :------------------- | :--------------------- |
-| 1   | BruteForce  | `cosine_sim_numpy`                      | OFF   | sequential  | 72.79 ms (1.00×)     | 1,637 ms (1.00×)     | 13.74 s (1.00×)        |
-| **2** | **IVF(64,8)** | **`cosine_sim_numpy`**                 | **ON** | **async** | **7.37 ms (9.88×)** | **262 ms (6.24×)**  | **2.22 s (6.19×)**     |
-| 3   | IVF(64,8)   | `cosine_sim_numpy`                      | ON    | threaded    | 7.71 ms (9.44×)      | 374 ms (4.37×)       | 3.12 s (4.40×)         |
-| 4   | IVF(64,8)   | `cosine_sim_numba_parallel_precomputed` | ON    | async       | 8.87 ms (8.21×)      | 286 ms (5.72×)       | 2.43 s (5.64×)         |
-| 5   | IVF(64,8)   | `cosine_sim_numba_parallel_precomputed` | ON    | threaded    | 8.82 ms (8.26×)      | 346 ms (4.73×)       | 2.91 s (4.72×)         |
+| Index         | Cosine similarity kenrel | norm cache | batch embed | LLM mode     | Embed/q latency    | Search/q latency    | Gen/call latency   | E2E inference latency (total) |
+| :------------ | :----------------------- | :--------- | :---------- | :----------- | :----------------- | :------------------ | :----------------- | :---------------------------- |
+| BruteForce    | NumPy                    | OFF        | OFF         | sequential   | 7.3 ms (1.00x)     | 69.04 ms (1.00x)    | 1996 ms (1.00x)    | 16.58 s (1.00x)               |
+| IVF(64,8)     | NumPy                    | ON         | ON          | async        | 2.5 ms (2.93x)     | 6.37 ms (10.83x)    | 433 ms (4.61x)     | 3.54 s (4.69x)                |
+| IVF(64,8)     | NumPy                    | ON         | ON          | threaded     | 2.3 ms (3.13x)     | 7.16 ms (9.64x)     | 465 ms (4.29x)     | 3.79 s (4.37x)                |
+| IVF(64,8)     | Numba parallel           | ON         | ON          | async        | 2.5 ms (2.93x)     | 8.82 ms (7.83x)     | 353 ms (5.65x)     | 2.92 s (5.68x)                |
+| **IVF(64,8)** | **Numba parallel**       | **ON**     | **ON**      | **threaded** | **2.3 ms (3.13x)** | **7.88 ms (8.76x)** | **266 ms (7.52x)** | **2.21 s (7.52x)**            |
 
-**Best E2E: ~6.2× faster than baseline.** Roughly half the win is structural retrieval (IVF + norm cache → 9.4-9.9× search speedup); the other half is LLM concurrency (async/threaded → 4-6× per-call gen speedup amortized over 8 calls). At this candidate-set size (n_probes=8 over 64 clusters), Numba parallel doesn't outpace BLAS NumPy — the corpus slice is small enough that thread-launch overhead eats the kernel speedup.
+
+<!-- | Retrieval Config                                          | Gen Mode     | Total Search latency (ms) | Total Gen latency (s) | Total E2E Inference Latency (s) | E2E Speedup |
+| :-------------------------------------------------------- | :----------- | :------------------------ | :-------------------- | :------------------------------ | :---------- |
+| BruteForce + NumPy                                        | sequential   | 552.32                    | 15.97                 | 16.58                           | 1.00x       |
+| IVF(64, 8) + NumPy (norm cache, batch embed)              | async        | 50.96                     | 3.46                  | 3.54                            | 4.69x       |
+| IVF(64, 8) + NumPy (norm cache, batch embed)              | threaded     | 57.28                     | 3.72                  | 3.79                            | 4.37x       |
+| IVF(64, 8) + Numba parallel (norm cache, batch embed)     | async        | 70.56                     | 2.82                  | 2.92                            | 5.68x       |
+| **IVF(64, 8) + Numba parallel (norm cache, batch embed)** | **threaded** | **63.04**                 | **2.13**              | **2.21**                        | **7.52x**   | -->
+
+
+**Best E2E in this run: row 5 (~7.5× vs baseline).** IVF + norm cache + batched query embedding cuts search to ~8–11× faster than BruteForce; overlapping LLM calls (async/threaded) amortizes generation. Here Numba + threaded edges out the NumPy + async row on end-to-end latency (API variance also affects gen/call).
 
 ---
 
@@ -129,7 +139,7 @@ IVF trades ~4.5% recall for 5-9× faster queries. The "norm cache + batch embed"
 ├── portal.py                    ← main benchmarking module (shared by both notebooks)
 ├── interact_portal.ipynb        ← step-by-step optimization notebook (Steps 1-6)
 ├── compare_pipelines.ipynb      ← 3-way final comparison notebook
-├── run_5_configs.py             ← end-to-end 5-config comparison CLI (table above)
+├── run_5_configs.py             ← end-to-end inference 5-config comparison CLI (table above)
 │
 ├── comparisons/                 ← self-contained Python scripts for 3-way comparison
 │   ├── common.py                ← shared setup and data loading
