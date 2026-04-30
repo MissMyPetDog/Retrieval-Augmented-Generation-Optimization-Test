@@ -1,4 +1,4 @@
-# RAG Pipeline Optimization
+# RAG Pipeline Optimization 
 
 A Retrieval-Augmented Generation system built from scratch (no LangChain / LlamaIndex / FAISS), then systematically optimized end-to-end inference latency on CPU only.
 
@@ -58,7 +58,7 @@ jupyter lab compare_pipelines.ipynb     # 3-way final comparison (BruteForce vs 
 
 | **Flag**                | **Effect**                                                                                   |
 | :---------------------- | :------------------------------------------------------------------------------------------- |
-| `-n, --n_queries`       | queries per config (default 8). Total real ChatGPT calls = `n_queries * 7`                   |
+| `-n, --n_queries`       | queries per config (default 8). Total real ChatGPT calls = `n_queries * 8`                   |
 | `-w, --n_async_workers` | LLM concurrency for configs 2-5 (default 8). Try 16/32/64 to probe ChatGPT's concurrency cap |
 | `--no_batch_embed`      | use per-query embed for configs 2-5 (hides Embed/q + batch columns in table)                 |
 | `--max_tokens`          | LLM max_tokens (default 128)                                                                 |
