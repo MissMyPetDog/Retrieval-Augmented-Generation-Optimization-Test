@@ -505,15 +505,10 @@ def run_retrieval_tests(vectors, doc_ids, chunk_lookup, queries, device):
 def run_llm_tests(vectors, doc_ids, chunk_lookup, queries,
                   n_queries=8, k=3, max_tokens=128):
     """
-    Real-API LLM benchmarks (Step 4 + Step 5 + Section 7 of the optimization journey).
+    Real-API LLM benchmarks: concurrent generation (sequential vs threaded vs async).
 
-    Hits NYU's ChatGPT-4o endpoint. Requires OPENAI_API_KEY env var.
-    Cost: ~8 calls x 4-5 modes ~= 35 real API calls, ~$0.15 per run.
-
-    Three sections:
-      1. Concurrent generation (sequential vs threaded vs async)  -- Section 7
-      2. LLM streaming          (non-stream vs stream, TTFT metric) -- Step 4
-      3. Pipelined RAG          (naive serial vs dual-pool)         -- Step 5
+    Hits OpenAI's gpt-4o. Requires OPENAI_API_KEY env var.
+    Cost: n_queries x 3 real API calls (~$0.07 at n_queries=8).
     """
     if "OPENAI_API_KEY" not in os.environ:
         print("\n!!! OPENAI_API_KEY not set in environment -- skipping LLM tests. !!!")
@@ -521,7 +516,7 @@ def run_llm_tests(vectors, doc_ids, chunk_lookup, queries,
         return {"skipped": True, "reason": "no_api_key"}
 
     print(f"\n{'='*65}")
-    print(f"LLM BENCHMARK (real ChatGPT-4o, ~{n_queries * 4} API calls)")
+    print(f"LLM BENCHMARK (real gpt-4o, ~{n_queries * 3} API calls)")
     print(f"{'='*65}")
 
     # Import portal from project root for shared LLM benchmark logic
@@ -554,31 +549,13 @@ def run_llm_tests(vectors, doc_ids, chunk_lookup, queries,
 
     results_out = {}
 
-    # --- Section 1: concurrent generation (non-streaming) -- Section 7 ---
-    print(f"\n  === Section 1: Concurrent generation (non-stream) ===")
+    # --- Concurrent generation (non-streaming) ---
+    print(f"\n  === Concurrent generation (non-stream) ===")
     r_gen = portal.run_async_generation_benchmarks(
         items, n_threads=8, max_async=8,
         model="gpt-4o", max_tokens=max_tokens, verbose=True,
     )
     results_out["concurrent_generation"] = r_gen
-
-    # --- Section 2: streaming (Step 4) ---
-    print(f"\n  === Section 2: LLM streaming (TTFT metric) -- Step 4 ===")
-    r_stream = portal.run_streaming_generation_benchmarks(
-        items, model="gpt-4o", max_tokens=max_tokens,
-        concurrent_workers=8, verbose=True,
-    )
-    results_out["streaming"] = r_stream
-
-    # --- Section 3: pipelined RAG (Step 5) -- uses real queries, not precomputed items ---
-    print(f"\n  === Section 3: Pipelined RAG (dual-pool) -- Step 5 ===")
-    r_pipe = portal.run_pipeline_benchmarks(
-        selected, chunks, bf,
-        n_items=n_queries, k=k,
-        n_embed_workers=4, n_gen_workers=8,
-        model="gpt-4o", max_tokens=max_tokens, verbose=True,
-    )
-    results_out["pipeline"] = r_pipe
 
     # --- Summary ---
     print(f"\n  --- LLM benchmark summary ---")
@@ -589,14 +566,6 @@ def run_llm_tests(vectors, doc_ids, chunk_lookup, queries,
         if name.startswith(("Threaded", "Async")):
             print(f"  Concurrent non-stream ({name:<18s}): {d['total_ms']/1000:6.2f} s "
                   f"({d['speedup_vs_sequential']:.2f}x)")
-    if "Sequential (non-stream)" in r_stream:
-        print(f"  Streaming (sequential) TTFT           : "
-              f"{r_stream['Sequential (streaming)']['mean_ttft_ms']:6.0f} ms "
-              f"(vs non-stream {r_stream['Sequential (non-stream)']['mean_ttft_ms']:.0f} ms)")
-    for name, d in r_pipe.items():
-        if name.startswith("Pipelined"):
-            print(f"  Pipelined RAG end-to-end              : "
-                  f"{d['total_ms']/1000:6.2f} s ({d['speedup_vs_sequential']:.2f}x vs naive)")
 
     return results_out
 
@@ -668,12 +637,12 @@ def main():
                         help="Also run build-time benchmarks (NumPy vs Numba vs Numba+K-Means++). "
                              "No API cost.")
     parser.add_argument("--with_llm", action="store_true",
-                        help="Also run LLM benchmarks (streaming + concurrent + pipelined). "
-                             "REQUIRES OPENAI_API_KEY env var. ~$0.15 per run.")
+                        help="Also run LLM benchmarks (concurrent generation). "
+                             "REQUIRES OPENAI_API_KEY env var. ~$0.07 per run.")
     parser.add_argument("--build_only", action="store_true",
                         help="Only run build-time benchmarks (K-Means variants)")
     parser.add_argument("--llm_only", action="store_true",
-                        help="Only run LLM benchmarks (streaming + concurrent + pipelined). "
+                        help="Only run LLM benchmarks (concurrent generation). "
                              "REQUIRES OPENAI_API_KEY.")
     args = parser.parse_args()
 
