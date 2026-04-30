@@ -6,6 +6,8 @@ Dataset: **MS MARCO `medium`** — 100,000 passages, 500 queries with relevance 
 
 Most numbers below are loaded from [`rag-optimization/data/medium/test_results_cpu.json`](rag-optimization/data/medium/test_results_cpu.json) (produced by `run_test.py`); the end-to-end inference comparison comes from `results/5_configs.json` (produced by `run_5_configs.py`).
 
+> Note: reported timings and generation latencies depend on software versions, CPU/network conditions, and the current GPT API service load. Your exact numbers may vary, but the optimization trends and relative speedups should be similar.
+
 ---
 
 ## Quick Start
@@ -25,6 +27,7 @@ python rag-optimization/run_test.py --data_dir rag-optimization/data/medium --de
 python rag-optimization/benchmarks/nprobe_tradeoff.py --data_dir rag-optimization/data/medium --probes 1 2 4 8 16 32 64
 
 # 4. Add real LLM benchmarks (requires ChatGPT_API_KEY env var, ~$0.15)
+# Before running generation with GPT, make sure to set `os.environ["OPENAI_API_KEY"]` or export `OPENAI_API_KEY` in your shell.
 python rag-optimization/run_test.py --data_dir rag-optimization/data/medium --device cpu --with_build --with_llm
 
 # 5. End-to-end inference 5-config comparison: full pipeline timed for each component combo
